@@ -69,7 +69,7 @@ const generarUnidades=()=>{
 /* ─── UTILS ──────────────────────────────────────── */
 const hashPwd=async p=>{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(p));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('');};
 const loadJS=src=>new Promise((res,rej)=>{if(document.querySelector(`script[src="${src}"]`))return res();const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=rej;document.body.appendChild(s);});
-const fmt=n=>`$${Number(n).toLocaleString('es-MX',{minimumFractionDigits:2})}`;
+const fmt=n=>'$'+Number(n).toLocaleString('es-MX',{minimumFractionDigits:2});
 // Convierte fecha de Excel (número serial o string) a YYYY-MM-DD
 const excelFecha=v=>{
   if(!v) return new Date().toISOString().split('T')[0];
@@ -90,7 +90,7 @@ const excelFecha=v=>{
   }
   return String(v);
 };
-const fmtK=n=>n>=1000?`$${(n/1000).toFixed(0)}k`:`$${n}`;
+const fmtK=n=>n>=1000?'$'+(n/1000).toFixed(0)+'k':'$'+n;
 
 /* ─── ICONOS ─────────────────────────────────────── */
 const Ic=({d,sz=16,cls='',st={}})=><svg xmlns="http://www.w3.org/2000/svg" width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={cls} style={st} dangerouslySetInnerHTML={{__html:d}}/>;
@@ -541,13 +541,13 @@ function App(){
     hdrSimple(doc);
     const datos=pagosFiltrados.filter(p=>filtroEstatus==='todos'||p.estatus===filtroEstatus);
     doc.setFontSize(9);doc.setTextColor(40,40,40);
-    doc.text(`Período: ${MESES_L[now.getMonth()]} ${now.getFullYear()} | Filtro: ${filtroEstatus==='todos'?'Todos':filtroEstatus.toUpperCase()}`,14,42);
+    doc.text('Periodo: '+MESES_L[now.getMonth()]+' '+now.getFullYear()+' | Filtro: '+(filtroEstatus==='todos'?'Todos':filtroEstatus.toUpperCase()),14,42);
     doc.autoTable({startY:47,head:[['Local','Concepto','Monto','Fecha','Folio','Estatus']],body:datos.map(p=>[p.unidadId,p.concepto,fmt(p.monto),p.fecha,p.folio,p.estatus.toUpperCase()]),headStyles:{fillColor:[11,37,69],textColor:255,fontSize:9},bodyStyles:{fontSize:8},alternateRowStyles:{fillColor:[244,245,247]}});
     const fy=doc.lastAutoTable.finalY+8;
     const rec=datos.filter(p=>p.estatus==='pagado').reduce((s,p)=>s+Number(p.monto),0);
     const pen=datos.filter(p=>p.estatus==='pendiente').reduce((s,p)=>s+Number(p.monto),0);
-    doc.setFontSize(10);doc.text(`Recaudado: ${fmt(rec)}`,14,fy);doc.text(`Pendiente: ${fmt(pen)}`,14,fy+6);
-    doc.save(`ValleAlto_Mes_${now.getFullYear()}_${now.getMonth()+1}_${filtroEstatus}.pdf`);
+    doc.setFontSize(10);doc.text('Recaudado: '+fmt(rec),14,fy);doc.text('Pendiente: '+fmt(pen),14,fy+6);
+    doc.save('ValleAlto_Mes_'+now.getFullYear()+'_'+(now.getMonth()+1)+'_'+filtroEstatus+'.pdf');
     showToast('PDF exportado','ok');setMExportPDF(false);
   };
 
@@ -557,7 +557,7 @@ function App(){
     const{jsPDF}=window.jspdf;const doc=new jsPDF();
     hdrSimple(doc);
     doc.setFontSize(11);doc.setTextColor(40,40,40);doc.text('ESTADO DE CUENTA',14,40);
-    doc.setFontSize(9);doc.text(`Período: ${MESES_L[mesD-1]} ${anoD} — ${MESES_L[mesH-1]} ${anoH} | Saldos: ${tipo==='ambos'?'Todos':tipo}`,14,47);
+    doc.setFontSize(9);doc.text('Periodo: '+MESES_L[mesD-1]+' '+anoD+' - '+MESES_L[mesH-1]+' '+anoH+' | Saldos: '+(tipo==='ambos'?'Todos':tipo),14,47);
     let startY=53;
     uids.forEach((uid,idx)=>{
       if(idx>0){doc.addPage();hdrSimple(doc);startY=40;}
@@ -570,8 +570,8 @@ function App(){
       });
       const tp=movs.filter(p=>p.estatus==='pagado').reduce((s,p)=>s+Number(p.monto),0);
       const td=movs.filter(p=>p.estatus==='pendiente').reduce((s,p)=>s+Number(p.monto),0);
-      doc.setFontSize(11);doc.setTextColor(11,37,69);doc.text(`Local / Unidad: ${uid}`,14,startY);
-      doc.setFontSize(8);doc.setTextColor(120,120,120);doc.text(`Folio: EC-${uid}-${Date.now().toString().slice(-4)}`,14,startY+6);
+      doc.setFontSize(11);doc.setTextColor(11,37,69);doc.text('Local / Unidad: '+uid,14,startY);
+      doc.setFontSize(8);doc.setTextColor(120,120,120);doc.text('Folio: EC-'+uid+'-'+Date.now().toString().slice(-4),14,startY+6);
       doc.autoTable({startY:startY+10,head:[['Fecha','Concepto','Folio','Monto','Estatus']],body:movs.length>0?movs.map(p=>[p.fecha,p.concepto,p.folio,fmt(p.monto),p.estatus.toUpperCase()]):[['—','Sin movimientos en el período','—','—','—']],headStyles:{fillColor:[11,37,69],textColor:255,fontSize:8},bodyStyles:{fontSize:8},alternateRowStyles:{fillColor:[244,245,247]},columnStyles:{3:{halign:'right'},4:{halign:'center'}}});
       const fy=doc.lastAutoTable.finalY+6;
       doc.setFillColor(244,245,247);doc.rect(110,fy,86,tipo==='ambos'?28:18,'F');
@@ -583,7 +583,7 @@ function App(){
     });
     doc.setFontSize(8);doc.setTextColor(120,120,120);
     doc.text('Documento oficial — Administración Edificio Valle Alto.',14,285);
-    doc.save(`EdoCuenta_${uids.join('-')}_${mesD}${anoD}.pdf`);
+    doc.save('EdoCuenta_'+uids.join('-')+'_'+mesD+''+anoD+'.pdf');
     setMEdo(false);showToast('Estado de cuenta: '+uids.length+' local'+(uids.length>1?'es':''),  'ok');
   };
 
