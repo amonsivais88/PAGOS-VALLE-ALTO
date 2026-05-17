@@ -590,7 +590,8 @@ function App(){
   /* ─── REPORTE FINANCIERO TIPO PRESENTACIÓN ────── */
   const genReportePresent=async({mes,ano,cxp,cxpDesc})=>{
     await ensurePDF();
-    const{jsPDF}=window.jspdf;const doc=new jsPDF('p','mm','a4');
+    console.log('jsPDF cargado, iniciando reporte...');
+    const{jsPDF}=window.jspdf;const doc=new jsPDF('p','mm','a4');console.log('Doc creado OK');
     const W=210,H=297;
     const mesNom=MESES_L[mes-1];
     const numReporte=String(mes).padStart(2,'0')+'/'+String(ano);
@@ -652,7 +653,7 @@ function App(){
       MESES_S.forEach((m,i)=>doc.text(m,x+i*(bw+1)+bw/2,y+h+4,{align:'center'}));
     };
 
-    // ─── PÁGINA 1: PORTADA ─────────────────────────
+    console.log('Iniciando portada...');// ─── PÁGINA 1: PORTADA ─────────────────────────
     // Fondo superior azul marino
     doc.setFillColor(11,37,69);doc.rect(0,0,W,H/2,'F');
     // Texto pequeño arriba
@@ -681,7 +682,7 @@ function App(){
     // Foto del edificio en la mitad inferior
     try{if(window.EDIFICIO_IMG&&window.EDIFICIO_IMG.length>100){doc.addImage(window.EDIFICIO_IMG,'JPEG',0,H/2,W,H/2);}}catch(e){console.warn('Img edificio:',e);doc.setFillColor(200,210,220);doc.rect(0,H/2,W,H/2,'F');}
 
-    // ─── PÁGINA 2: ÍNDICE ─────────────────────────
+    console.log('Pag 2 indice...');// ─── PÁGINA 2: ÍNDICE ─────────────────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');
@@ -703,7 +704,7 @@ function App(){
       iy=cy+10;
     });
 
-    // ─── PÁGINA 3: CAPÍTULO I PORTADA ─────────────
+    console.log('Pag 3 cap1...');// ─── PÁGINA 3: CAPÍTULO I PORTADA ─────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,H,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('C A P Í T U L O  I',14,20);
@@ -711,7 +712,7 @@ function App(){
     doc.setFontSize(11);doc.setTextColor(180,190,210);doc.setFont('helvetica','normal');
     doc.text('Análisis detallado de ingresos, egresos y saldo final de caja del mes.',14,62);
 
-    // ─── PÁGINA 4: INGRESOS DEL MES ───────────────
+    console.log('Pag 4 ingresos...');// ─── PÁGINA 4: INGRESOS DEL MES ───────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('SECCIÓN 1.1',14,11);
@@ -720,7 +721,7 @@ function App(){
     doc.text('Detalle de las entradas registradas en el periodo, segmentadas por concepto.',14,40);
     doc.autoTable({startY:46,head:[['CONCEPTO','MONTO (MXN)']],body:[...Object.entries(ingConc).map(([c,v])=>[c,fmt(v)]),['TOTAL DE INGRESOS DEL MES',fmt(totalIngMes)]],headStyles:{fillColor:[11,37,69],textColor:255,fontSize:9,fontStyle:'bold'},bodyStyles:{fontSize:9},alternateRowStyles:{fillColor:[244,245,247]},columnStyles:{1:{halign:'right'}},foot:[],didParseCell:d=>{if(d.row.index===Object.keys(ingConc).length){d.cell.styles.fontStyle='bold';d.cell.styles.fillColor=[11,37,69];d.cell.styles.textColor=[255,255,255];}}});
 
-    // ─── PÁGINA 5: TENDENCIA INGRESOS ─────────────
+    console.log('Pag 5 tendencia...');// ─── PÁGINA 5: TENDENCIA INGRESOS ─────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('SECCIÓN 1.2',14,11);
@@ -732,7 +733,7 @@ function App(){
     doc.setFontSize(10);doc.setTextColor(30,40,50);doc.text('Ingresos por mes (MXN)',18,61);
     drawBarChart(doc,18,65,W-36,45,serieMes.map(x=>x.ing),maxIng,[11,37,69],mes);
 
-    // ─── PÁGINA 6: GASTOS OPERATIVOS ──────────────
+    console.log('Pag 6 gastos...');// ─── PÁGINA 6: GASTOS OPERATIVOS ──────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('SECCIÓN 1.3',14,11);
@@ -759,7 +760,7 @@ function App(){
     bodyEx.push(['TOTAL DE GASTOS EXTRAORDINARIOS',fmt(totalGastosEx)]);
     doc.autoTable({startY:fy2+26,head:[['CONCEPTO','MONTO (MXN)']],body:bodyEx,headStyles:{fillColor:[11,37,69],textColor:255,fontSize:9},bodyStyles:{fontSize:8},alternateRowStyles:{fillColor:[244,245,247]},columnStyles:{1:{halign:'right'}},didParseCell:d=>{if(d.row.index===bodyEx.length-1){d.cell.styles.fontStyle='bold';d.cell.styles.fillColor=[11,37,69];d.cell.styles.textColor=[255,255,255];}}});
 
-    // ─── PÁGINA 7: TOTALES + SALDO ─────────────────
+    console.log('Pag 7 totales...');// ─── PÁGINA 7: TOTALES + SALDO ─────────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('SECCIÓN 1.6',14,11);
@@ -790,7 +791,7 @@ function App(){
     doc.setTextColor(201,169,97);doc.setFontSize(10);doc.setFont('helvetica','bold');
     doc.text('Saldo de Caja: '+fmt(saldoCaja),16,ry+23);
 
-    // ─── PÁGINA 8: CAP II PORTADA ──────────────────
+    console.log('Pag 8 cap2...');// ─── PÁGINA 8: CAP II PORTADA ──────────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,H,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('C A P Í T U L O  I I',14,20);
@@ -798,7 +799,7 @@ function App(){
     doc.setFontSize(11);doc.setTextColor(180,190,210);doc.setFont('helvetica','normal');
     doc.text('Estatus de cobranza ordinaria, mapa de deudores y cuentas por pagar.',14,62);
 
-    // ─── PÁGINA 9: COBRANZA GENERAL ───────────────
+    console.log('Pag 9 cobranza...');// ─── PÁGINA 9: COBRANZA GENERAL ───────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('SECCIÓN 2.1',14,11);
@@ -823,7 +824,7 @@ function App(){
     doc.setFontSize(9);doc.setTextColor(40,40,40);doc.setFont('helvetica','normal');
     doc.text('Total locales: '+totalLocales+' | Al corriente: '+localesAlCorriente+' | Con adeudo: '+soloMorosos.length,14,94);
 
-    // ─── PÁGINA 10: MAPA DE DEUDORES ──────────────
+    console.log('Pag 10 mapa...');// ─── PÁGINA 10: MAPA DE DEUDORES ──────────────
     doc.addPage();
     doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
     doc.setFontSize(7);doc.setTextColor(201,169,97);doc.setFont('helvetica','bold');doc.text('SECCIÓN 2.2',14,11);
@@ -866,7 +867,7 @@ function App(){
       doc.text(topMor.join('  ·  '),14,my+12);
     }
 
-    // ─── PÁGINA 11: CXP + FOOTER ──────────────────
+    console.log('Pag 11 cxp...');// ─── PÁGINA 11: CXP + FOOTER ──────────────────
     if(cxp>0||cxpDesc){
       doc.addPage();
       doc.setFillColor(11,37,69);doc.rect(0,0,W,18,'F');
@@ -886,7 +887,7 @@ function App(){
       doc.text('Documento N. '+numReporte,W-14,H-4,{align:'right'});
     }
 
-    doc.save('ReporteEVA_'+mesNom+'_'+ano+'.pdf');
+    console.log('Guardando PDF...');doc.save('ReporteEVA_'+mesNom+'_'+ano+'.pdf');
     setMReporte(false);showToast('Reporte '+mesNom+' '+ano+' generado','ok');
   };
 
