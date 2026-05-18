@@ -4752,6 +4752,3218 @@ function App() {
   };
 
   /* ─── REPORTE FINANCIERO TIPO PRESENTACIÓN ────── */
+  const sanitize = str => String(str || '').replace(/[^ -]/g, c => {
+    const map = {
+      'á': 'a',
+      'é': 'e',
+      'í': 'i',
+      'ó': 'o',
+      'ú': 'u',
+      'Á': 'A',
+      'É': 'E',
+      'Í': 'I',
+      'Ó': 'O',
+      'Ú': 'U',
+      'ñ': 'n',
+      'Ñ': 'N',
+      'ü': 'u',
+      'ü': 'u',
+      '·': '-',
+      '—': '-',
+      '–': '-',
+      '−': '-',
+      '›': '>',
+      '»': '>>',
+      '«': '<<'
+    };
+    return map[c] || '';
+  });
+  const genReportePresent = async ({
+    mes,
+    ano,
+    cxp,
+    cxpDesc
+  }) => {
+    await ensurePDF();
+    console.log('jsPDF cargado, iniciando reporte...');
+    const {
+      jsPDF
+    } = window.jspdf;
+    const doc = new jsPDF('p', 'mm', 'a4');
+    console.log('Doc creado OK');
+    const W = 210,
+      H = 297;
+    const mesNom = MESES_L[mes - 1];
+    const numReporte = String(mes).padStart(2, '0') + '/' + String(ano);
+    const periodoStr = 'Del 1 al ' + new Date(ano, mes, 0).getDate() + ' de ' + mesNom.toLowerCase() + ' ' + String(ano);
+
+    // Filtrar datos del mes
+    const pagosMes = pagos.filter(p => {
+      if (p.cancelado) return false;
+      const f = new Date(p.fecha + 'T00:00:00');
+      return f.getMonth() + 1 === mes && f.getFullYear() === ano;
+    });
+    const gastosMes = gastos.filter(g => {
+      const f = new Date(g.fecha + 'T00:00:00');
+      return f.getMonth() + 1 === mes && f.getFullYear() === ano;
+    });
+    const pagosAno = pagos.filter(p => {
+      if (p.cancelado) return false;
+      return new Date(p.fecha + 'T00:00:00').getFullYear() === ano;
+    });
+    const gastosAno = gastos.filter(g => new Date(g.fecha + 'T00:00:00').getFullYear() === ano);
+
+    // Ingresos agrupados por concepto
+    const ingConc = {};
+    pagosMes.filter(p => p.estatus === 'pagado').forEach(p => {
+      ingConc[p.concepto] = (ingConc[p.concepto] || 0) + Number(p.monto);
+    });
+    const totalIngMes = Object.values(ingConc).reduce((s, v) => s + v, 0);
+
+    // Gastos del mes
+    const gastosOpMes = gastosMes.filter(g => g.tipoGasto === 'operativo' || !g.tipoGasto);
+    const gastosExMes = gastosMes.filter(g => g.tipoGasto === 'extraordinario');
+    const totalGastosOp = gastosOpMes.reduce((s, g) => s + Number(g.monto), 0);
+    const totalGastosEx = gastosExMes.reduce((s, g) => s + Number(g.monto), 0);
+    const totalGastosMes = totalGastosOp + totalGastosEx;
+    const saldoCaja = totalIngMes - totalGastosMes;
+
+    // Morosos
+    const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => p.unidadId));
+    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado').map(p => p.unidadId));
+    const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
+    const localesAlCorriente = unidades.length - soloMorosos.length;
+
+    // Serie mensual para graficas (datos reales por mes del ano)
+    const serieMes = MESES_S.map((m, i) => {
+      const ing = pagosAno.filter(p => p.estatus === 'pagado' && new Date(p.fecha + 'T00:00:00').getMonth() === i).reduce((s, p) => s + Number(p.monto), 0);
+      const gasOp = gastosAno.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i).reduce((s, g) => s + Number(g.monto), 0);
+      const gasEx = gastosAno.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i).reduce((s, g) => s + Number(g.monto), 0);
+      const gasTot = gasOp + gasEx;
+      return {
+        m,
+        ing,
+        gasOp,
+        gasEx,
+        gasTot,
+        saldo: ing - gasTot
+      };
+    });
+    const maxIng = Math.max(...serieMes.map(x => x.ing), 1);
+    const maxGasOp = Math.max(...serieMes.map(x => x.gasOp), 1);
+    const maxGasTot = Math.max(...serieMes.map(x => x.gasTot), 1);
+    const maxSaldo = Math.max(...serieMes.map(x => x.saldo), 1);
+
+    // Helper: mini bar chart in PDF
+    const drawBarChart = (doc, x, y, w, h, data, maxVal, color, mesActual) => {
+      const bw = Math.floor(w / 12) - 1;
+      doc.setDrawColor(230, 230, 230);
+      data.forEach((val, i) => {
+        const bx = x + i * (bw + 1);
+        const bh = maxVal > 0 ? Math.round(val / maxVal * h) : 0;
+        const by = y + h - bh;
+        const isActual = i === mesActual - 1;
+        doc.setFillColor(...(isActual ? [11, 37, 69] : [180, 190, 200]));
+        doc.rect(bx, by, bw, bh, 'F');
+        if (bh > 0) {
+          doc.setFontSize(5);
+          doc.setTextColor(60, 60, 60);
+          const label = val >= 1000 ? '$' + Math.round(val / 1000) + 'K' : '';
+          if (label) doc.text(label, bx + bw / 2, by - 1, {
+            align: 'center'
+          });
+        }
+      });
+      // Eje X
+      doc.setFontSize(5);
+      doc.setTextColor(120, 120, 120);
+      MESES_S.forEach((m, i) => doc.text(m, x + i * (bw + 1) + bw / 2, y + h + 4, {
+        align: 'center'
+      }));
+    };
+    console.log('Iniciando portada...'); // --- PAGINA 1: PORTADA -------------------------
+    // Fondo superior azul marino
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, H / 2, 'F');
+    // Texto pequeno arriba
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('ADMINISTRACION  EDIFICIO  VALLE  ALTO  ' + ano, 14, 14);
+    // Seccion label
+    doc.setFontSize(8);
+    doc.setTextColor(180, 190, 210);
+    doc.setFont('helvetica', 'normal');
+    doc.text('REPORTE FINANCIERO Y DE OPERACIONES AL COMITE', 14, 35);
+    // Titulo grande
+    doc.setFontSize(28);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Reporte del mes de', 14, 58);
+    doc.setFontSize(28);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bolditalic');
+    doc.text(sanitize(mesNom) + ' ' + ano, 14, 72);
+    // Linea decorativa
+    doc.setDrawColor(201, 169, 97);
+    doc.setLineWidth(0.8);
+    doc.line(14, 80, 50, 80);
+    // Metadatos en 2 columnas
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(140, 155, 175);
+    doc.text('PERIODO', 14, 95);
+    doc.text('PRESENTADO A', W / 2, 95);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(220, 230, 245);
+    doc.text(sanitize(periodoStr), 14, 102);
+    doc.text('Comite Consultivo y de Vigilancia', W / 2, 102);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7);
+    doc.setTextColor(140, 155, 175);
+    doc.text('ELABORADO POR', 14, 114);
+    doc.text('DOCUMENTO', W / 2, 114);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(220, 230, 245);
+    doc.text('Administracion EVA ' + ano, 14, 121);
+    doc.text('Reporte mensual N. ' + numReporte, W / 2, 121);
+    // Foto del edificio en la mitad inferior
+    try {
+      if (window.EDIFICIO_IMG && window.EDIFICIO_IMG.length > 100) {
+        doc.addImage(window.EDIFICIO_IMG, 'JPEG', 0, H / 2, W, H / 2);
+      }
+    } catch (e) {
+      console.warn('Img edificio:', e);
+      doc.setFillColor(200, 210, 220);
+      doc.rect(0, H / 2, W, H / 2, 'F');
+    }
+    console.log('Pag 2 indice...'); // --- PAGINA 2: INDICE -------------------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('INDICE DEL REPORTE', 14, 11);
+    doc.setFontSize(22);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Temario', 14, 35);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Resumen de los apartados que componen el presente reporte mensual.', 14, 44);
+    const indice = [['I. Flujo de Efectivo', '> Ingresos del mes', '> Gastos operativos', '> Gastos extraordinarios', '> Total de gastos', '> Saldo final en caja'], ['II. Cobranza', '> Cobranza general', '> Mapa de deudores', '> Cuentas por pagar', '', '']];
+    let iy = 58;
+    indice.forEach(col => {
+      let cy = iy;
+      doc.setFontSize(11);
+      doc.setTextColor(11, 37, 69);
+      doc.setFont('helvetica', 'bold');
+      doc.text(col[0], 14, cy);
+      cy += 8;
+      col.slice(1).forEach(item => {
+        if (item) {
+          doc.setFontSize(9);
+          doc.setTextColor(80, 90, 105);
+          doc.setFont('helvetica', 'normal');
+          doc.text(item, 20, cy);
+          cy += 7;
+        }
+      });
+      iy = cy + 10;
+    });
+    console.log('Pag 3 cap1...'); // --- PAGINA 3: CAPITULO I PORTADA -------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, H, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('C A P I T U L O  I', 14, 20);
+    doc.setFontSize(28);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Flujo de Efectivo', 14, 50);
+    doc.setFontSize(11);
+    doc.setTextColor(180, 190, 210);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Analisis detallado de ingresos, egresos y saldo final de caja del mes.', 14, 62);
+    console.log('Pag 4 ingresos...'); // --- PAGINA 4: INGRESOS DEL MES ---------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 1.1', 14, 11);
+    doc.setFontSize(22);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Ingresos del mes', 14, 32);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Detalle de las entradas registradas en el periodo, segmentadas por concepto.', 14, 40);
+    doc.autoTable({
+      startY: 46,
+      head: [['CONCEPTO', 'MONTO (MXN)']],
+      body: [...Object.entries(ingConc).map(([c, v]) => [sanitize(c), sanitize(fmt(v))]), ['TOTAL DE INGRESOS DEL MES', sanitize(fmt(totalIngMes))]],
+      headStyles: {
+        fillColor: [11, 37, 69],
+        textColor: 255,
+        fontSize: 9,
+        fontStyle: 'bold'
+      },
+      bodyStyles: {
+        fontSize: 9
+      },
+      alternateRowStyles: {
+        fillColor: [244, 245, 247]
+      },
+      columnStyles: {
+        1: {
+          halign: 'right'
+        }
+      },
+      foot: [],
+      didParseCell: d => {
+        if (d.row.index === Object.keys(ingConc).length) {
+          d.cell.styles.fontStyle = 'bold';
+          d.cell.styles.fillColor = [11, 37, 69];
+          d.cell.styles.textColor = [255, 255, 255];
+        }
+      }
+    });
+    console.log('Pag 5 tendencia...'); // --- PAGINA 5: TENDENCIA INGRESOS -------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 1.2', 14, 11);
+    doc.setFontSize(22);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Total de ', 14, 32);
+    doc.setFont('helvetica', 'bolditalic');
+    doc.text('ingresos', 54, 32);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Tendencia mensual acumulada de ingresos del ejercicio.', 14, 40);
+    doc.setDrawColor(220, 225, 230);
+    doc.setLineWidth(0.3);
+    doc.rect(14, 48, W - 28, 70);
+    doc.setFontSize(6);
+    doc.setTextColor(100, 100, 100);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TENDENCIA MENSUAL DE INGRESOS - ' + ano, 18, 54);
+    doc.setFontSize(10);
+    doc.setTextColor(30, 40, 50);
+    doc.text('Ingresos por mes (MXN)', 18, 61);
+    drawBarChart(doc, 18, 65, W - 36, 45, serieMes.map(x => x.ing), maxIng, [11, 37, 69], mes);
+    console.log('Pag 6 gastos...'); // --- PAGINA 6: GASTOS OPERATIVOS --------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 1.3', 14, 11);
+    doc.setFontSize(22);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Gastos operativos', 14, 32);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Erogaciones recurrentes necesarias para la operacion cotidiana del edificio.', 14, 40);
+    const bodyOp = gastosOpMes.length > 0 ? gastosOpMes.map(g => [sanitize(g.concepto), sanitize(fmt(g.monto))]) : [['Sin gastos operativos registrados', '-']];
+    bodyOp.push(['TOTAL DE GASTOS OPERATIVOS DEL MES', fmt(totalGastosOp)]);
+    doc.autoTable({
+      startY: 46,
+      head: [['CONCEPTO', 'MONTO (MXN)']],
+      body: bodyOp,
+      headStyles: {
+        fillColor: [11, 37, 69],
+        textColor: 255,
+        fontSize: 9
+      },
+      bodyStyles: {
+        fontSize: 9
+      },
+      alternateRowStyles: {
+        fillColor: [244, 245, 247]
+      },
+      columnStyles: {
+        1: {
+          halign: 'right'
+        }
+      },
+      didParseCell: d => {
+        if (d.row.index === bodyOp.length - 1) {
+          d.cell.styles.fontStyle = 'bold';
+          d.cell.styles.fillColor = [11, 37, 69];
+          d.cell.styles.textColor = [255, 255, 255];
+        }
+      }
+    });
+
+    // Tendencia gastos op
+    const fy1 = doc.lastAutoTable.finalY + 10;
+    doc.setFontSize(6);
+    doc.setTextColor(100, 100, 100);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TENDENCIA MENSUAL DE GASTOS OPERATIVOS - ' + ano, 18, fy1 + 6);
+    doc.setFontSize(9);
+    doc.setTextColor(30, 40, 50);
+    doc.text('Gastos operativos por mes (MXN)', 18, fy1 + 13);
+    doc.setDrawColor(220, 225, 230);
+    doc.setLineWidth(0.3);
+    doc.rect(14, fy1, W - 28, 55);
+    drawBarChart(doc, 18, fy1 + 17, W - 36, 32, serieMes.map(x => x.gasOp), maxGasOp, [11, 37, 69], mes);
+
+    // Gastos extraordinarios
+    const fy2 = fy1 + 62;
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 1.5', 14, fy2 + 4);
+    doc.setFontSize(18);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Gastos ', 14, fy2 + 15);
+    doc.setFont('helvetica', 'bolditalic');
+    doc.text('extraordinarios', 47, fy2 + 15);
+    doc.setFontSize(8);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Erogaciones no recurrentes asociadas a mejoras o contingencias.', 14, fy2 + 22);
+    const bodyEx = gastosExMes.length > 0 ? gastosExMes.map(g => [sanitize(g.concepto), sanitize(fmt(g.monto))]) : [['Sin gastos extraordinarios en el mes', '-']];
+    bodyEx.push(['TOTAL DE GASTOS EXTRAORDINARIOS', fmt(totalGastosEx)]);
+    doc.autoTable({
+      startY: fy2 + 26,
+      head: [['CONCEPTO', 'MONTO (MXN)']],
+      body: bodyEx,
+      headStyles: {
+        fillColor: [11, 37, 69],
+        textColor: 255,
+        fontSize: 9
+      },
+      bodyStyles: {
+        fontSize: 8
+      },
+      alternateRowStyles: {
+        fillColor: [244, 245, 247]
+      },
+      columnStyles: {
+        1: {
+          halign: 'right'
+        }
+      },
+      didParseCell: d => {
+        if (d.row.index === bodyEx.length - 1) {
+          d.cell.styles.fontStyle = 'bold';
+          d.cell.styles.fillColor = [11, 37, 69];
+          d.cell.styles.textColor = [255, 255, 255];
+        }
+      }
+    });
+    console.log('Pag 7 totales...'); // --- PAGINA 7: TOTALES + SALDO -----------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 1.6', 14, 11);
+    doc.setFontSize(18);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Total de ', 14, 30);
+    doc.setFont('helvetica', 'bolditalic');
+    doc.text('gastos', 46, 30);
+    doc.setFontSize(8);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Tendencia consolidada (operativos + extraordinarios).', 14, 37);
+    doc.setDrawColor(220, 225, 230);
+    doc.setLineWidth(0.3);
+    doc.rect(14, 42, W - 28, 55);
+    doc.setFontSize(6);
+    doc.setTextColor(100, 100, 100);
+    doc.setFont('helvetica', 'bold');
+    doc.text('TENDENCIA MENSUAL DE GASTOS TOTALES - ' + ano, 18, 48);
+    doc.setFontSize(9);
+    doc.setTextColor(30, 40, 50);
+    doc.text('Gastos totales por mes (MXN)', 18, 55);
+    drawBarChart(doc, 18, 59, W - 36, 32, serieMes.map(x => x.gasTot), maxGasTot, [11, 37, 69], mes);
+    const sy = 103;
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 1.7', 14, sy);
+    doc.setFontSize(18);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Saldo final ', 14, sy + 11);
+    doc.setFont('helvetica', 'bolditalic');
+    doc.text('de caja', 55, sy + 11);
+    doc.setFontSize(8);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Evolucion mensual del saldo en caja (ingresos - gastos totales).', 14, sy + 18);
+    doc.setDrawColor(220, 225, 230);
+    doc.setLineWidth(0.3);
+    doc.rect(14, sy + 22, W - 28, 55);
+    doc.setFontSize(6);
+    doc.setTextColor(100, 100, 100);
+    doc.setFont('helvetica', 'bold');
+    doc.text('EVOLUCION DEL SALDO EN CAJA - ' + ano, 18, sy + 28);
+    doc.setFontSize(9);
+    doc.setTextColor(30, 40, 50);
+    doc.text('Saldo final de caja por mes (MXN)', 18, sy + 35);
+    drawBarChart(doc, 18, sy + 39, W - 36, 32, serieMes.map(x => Math.max(0, x.saldo)), maxSaldo, [11, 37, 69], mes);
+
+    // Resumen caja mes
+    const ry = sy + 83;
+    doc.setFillColor(11, 37, 69);
+    doc.rect(14, ry, W - 28, 28, 'F');
+    doc.setFontSize(9);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('RESUMEN DEL MES', 16, ry + 8);
+    doc.setFontSize(8);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Ingresos: ' + fmt(totalIngMes), 16, ry + 15);
+    doc.text('Gastos Op.: ' + fmt(totalGastosOp), 75, ry + 15);
+    doc.text('Gastos Ext.: ' + fmt(totalGastosEx), 134, ry + 15);
+    doc.setTextColor(201, 169, 97);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Saldo de Caja: ' + fmt(saldoCaja), 16, ry + 23);
+    console.log('Pag 8 cap2...'); // --- PAGINA 8: CAP II PORTADA ------------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, H, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('C A P I T U L O  I I', 14, 20);
+    doc.setFontSize(28);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Cobranza', 14, 50);
+    doc.setFontSize(11);
+    doc.setTextColor(180, 190, 210);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Estatus de cobranza ordinaria, mapa de deudores y cuentas por pagar.', 14, 62);
+    console.log('Pag 9 cobranza...'); // --- PAGINA 9: COBRANZA GENERAL ---------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 2.1', 14, 11);
+    doc.setFontSize(20);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Cobranza general', 14, 30);
+    doc.setFontSize(8);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Estatus consolidado de cobranza ordinaria del mes.', 14, 38);
+    // Objetivo
+    const objCobranza = pagos.filter(p => !p.cancelado && new Date(p.fecha + 'T00:00:00').getMonth() + 1 === mes && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + Number(p.monto), 0);
+    const montoPagado = pagosMes.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+    const pctCumpl = objCobranza > 0 ? Math.round(montoPagado / objCobranza * 100) : 0;
+    // KPI boxes
+    const boxes = [{
+      l: 'OBJETIVO DE COBRANZA',
+      v: sanitize(fmt(objCobranza))
+    }, {
+      l: 'RECAUDADO',
+      v: sanitize(fmt(montoPagado))
+    }, {
+      l: 'PENDIENTE',
+      v: sanitize(fmt(montoPendiente))
+    }, {
+      l: '% CUMPLIMIENTO',
+      v: pctCumpl + '%'
+    }];
+    boxes.forEach((b, i) => {
+      const bx = 14 + i % 2 * (W / 2 - 10),
+        by = 44 + Math.floor(i / 2) * 22;
+      doc.setFillColor(i === 3 && pctCumpl >= 60 ? [27, 127, 90] : [11, 37, 69]);
+      doc.setFillColor(11, 37, 69);
+      doc.rect(bx, by, W / 2 - 16, 18, 'F');
+      doc.setFontSize(6);
+      doc.setTextColor(201, 169, 97);
+      doc.setFont('helvetica', 'bold');
+      doc.text(b.l, bx + 4, by + 6);
+      doc.setFontSize(11);
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.text(b.v, bx + 4, by + 14);
+    });
+    // Totales locales
+    const totalLocales = unidades.length;
+    doc.setFontSize(9);
+    doc.setTextColor(40, 40, 40);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Total locales: ' + totalLocales + ' | Al corriente: ' + localesAlCorriente + ' | Con adeudo: ' + soloMorosos.length, 14, 94);
+    console.log('Pag 10 mapa...'); // --- PAGINA 10: MAPA DE DEUDORES --------------
+    doc.addPage();
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, W, 18, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(201, 169, 97);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SECCION 2.2', 14, 11);
+    doc.setFontSize(20);
+    doc.setTextColor(11, 37, 69);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Mapa de deudores', 14, 30);
+    doc.setFontSize(8);
+    doc.setTextColor(100, 110, 125);
+    doc.setFont('helvetica', 'normal');
+    doc.text('Visualizacion del estatus de cobranza por local.', 14, 38);
+    // Leyenda
+    doc.setFillColor(27, 127, 90);
+    doc.rect(14, 42, 8, 4, 'F');
+    doc.setFontSize(7);
+    doc.setTextColor(40, 40, 40);
+    doc.text('Al corriente', 24, 46);
+    doc.setFillColor(166, 39, 58);
+    doc.rect(65, 42, 8, 4, 'F');
+    doc.text('Con adeudo', 75, 46);
+    // Calcular morosos con mas de 3 meses (simplificado: aparecen en meses anteriores)
+    const morosos3m = new Set();
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente').forEach(p => {
+      const f = new Date(p.fecha + 'T00:00:00');
+      const mesesAtras = (ano - f.getFullYear()) * 12 + (mes - 1 - f.getMonth());
+      if (mesesAtras >= 3) morosos3m.add(p.unidadId);
+    });
+    // Dibujar mapa grid
+    var filas = [['PB2', 'PB3', 'P8']];
+    for (var fp = 1; fp <= 7; fp++) {
+      var frow = [];
+      for (var fn = 1; fn <= 12; fn++) {
+        frow.push(String(fp) + (fn < 10 ? '0' + String(fn) : String(fn)));
+      }
+      filas.push(frow);
+    }
+    let my = 52;
+    filas.forEach((fila, fi) => {
+      fila.forEach((id, ci) => {
+        const cx = 14 + ci * 15.5;
+        const uid = fi === 0 ? id === 'PB2' ? 'PB2' : id === 'PB3' ? 'PB3' : 'P8' : id;
+        const esMoroso = morosos.has(uid) && !alCorriente.has(uid);
+        const esMoroso3m = morosos3m.has(uid);
+        if (esMoroso3m) doc.setFillColor(139, 0, 0);else if (esMoroso) doc.setFillColor(166, 39, 58);else doc.setFillColor(27, 127, 90);
+        doc.rect(cx, my, 13, 6, 'F');
+        doc.setFontSize(5.5);
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.text(uid.length > 3 ? uid.slice(0, 3) : uid, cx + 6.5, my + 4, {
+          align: 'center'
+        });
+      });
+      my += 8;
+    });
+    // Lista top morosos
+    const topMor = [...morosos].filter(id => !alCorriente.has(id)).slice(0, 10);
+    if (topMor.length > 0) {
+      doc.setFontSize(8);
+      doc.setTextColor(11, 37, 69);
+      doc.setFont('helvetica', 'bold');
+      doc.text('LOCALES CON SALDO PENDIENTE EN EL MES:', 14, my + 6);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(60, 60, 60);
+      doc.text(topMor.map(sanitize).join(' - '), 14, my + 12);
+    }
+    console.log('Pag 11 cxp...'); // --- PAGINA 11: CXP + FOOTER ------------------
+    if (cxp > 0 || cxpDesc) {
+      doc.addPage();
+      doc.setFillColor(11, 37, 69);
+      doc.rect(0, 0, W, 18, 'F');
+      doc.setFontSize(7);
+      doc.setTextColor(201, 169, 97);
+      doc.setFont('helvetica', 'bold');
+      doc.text('SECCION 2.3', 14, 11);
+      doc.setFontSize(20);
+      doc.setTextColor(11, 37, 69);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Cuentas por pagar', 14, 30);
+      doc.setFontSize(8);
+      doc.setTextColor(100, 110, 125);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Obligaciones financieras pendientes con proveedores del condominio.', 14, 38);
+      doc.autoTable({
+        startY: 44,
+        head: [['PROVEEDOR', 'MONTO ACTUAL']],
+        body: [[sanitize(cxpDesc || 'Por definir'), sanitize(fmt(cxp))], ['TOTAL', sanitize(fmt(cxp))]],
+        headStyles: {
+          fillColor: [11, 37, 69],
+          textColor: 255,
+          fontSize: 9
+        },
+        bodyStyles: {
+          fontSize: 9
+        },
+        columnStyles: {
+          1: {
+            halign: 'right'
+          }
+        },
+        didParseCell: d => {
+          if (d.row.index === 1) {
+            d.cell.styles.fontStyle = 'bold';
+            d.cell.styles.fillColor = [11, 37, 69];
+            d.cell.styles.textColor = [255, 255, 255];
+          }
+        }
+      });
+    }
+
+    // Footer en todas las paginas
+    const totalPags = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPags; i++) {
+      doc.setPage(i);
+      doc.setFillColor(11, 37, 69);
+      doc.rect(0, H - 10, W, 10, 'F');
+      doc.setFontSize(7);
+      doc.setTextColor(180, 190, 210);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Administracion Edificio Valle Alto ' + ano + ' - Reporte ' + mesNom + ' ' + ano, 14, H - 4);
+      doc.text('Documento N. ' + numReporte, W - 14, H - 4, {
+        align: 'right'
+      });
+    }
+    console.log('Guardando PDF...');
+    doc.save('ReporteEVA_' + mesNom + '_' + ano + '.pdf');
+    setMReporte(false);
+    showToast('Reporte ' + mesNom + ' ' + ano + ' generado', 'ok');
+  };
+
+  /* DATOS DERIVADOS */
+  const pagosMesActual = useMemo(() => pagos.filter(p => {
+    if (p.cancelado) return false;
+    const f = new Date(p.fecha + 'T00:00:00');
+    return f.getMonth() + 1 === now.getMonth() + 1 && f.getFullYear() === now.getFullYear();
+  }), [pagos]);
+  const pagosFiltrados = useMemo(() => {
+    const base = tab === 'actual' ? pagosMesActual : pagos;
+    let arr = base.filter(p => {
+      if (p.cancelado) return false;
+      if (tab === 'historico') {
+        const f = new Date(p.fecha + 'T00:00:00');
+        if (fMes !== 'todos' && f.getMonth() + 1 !== Number(fMes)) return false;
+        if (fAno !== 'todos' && f.getFullYear() !== Number(fAno)) return false;
+      }
+      if (fLocal !== 'todos' && p.unidadId !== fLocal) return false;
+      if (fEst !== 'todos' && p.estatus !== fEst) return false;
+      if (fConc !== 'todos' && p.concepto !== fConc) return false;
+      if (fBusq) {
+        const q = fBusq.toLowerCase();
+        if (!p.unidadId.toLowerCase().includes(q) && !p.concepto.toLowerCase().includes(q) && !(p.folio || '').toLowerCase().includes(q)) return false;
+      }
+      return true;
+    });
+    arr.sort((a, b) => {
+      // Ordenar por local primero (numérico), luego por concepto
+      const localA = a.unidadId || '';
+      const localB = b.unidadId || '';
+      // Extraer número del local para orden numérico correcto (101 < 102 < 201...)
+      const numA = parseInt(localA.replace(/\D/g, '')) || 0;
+      const numB = parseInt(localB.replace(/\D/g, '')) || 0;
+      if (numA !== numB) return sortDir === 'desc' ? numB - numA : numA - numB;
+      // Si es el mismo local, ordenar por concepto
+      const concA = CONCEPTOS.indexOf(a.concepto);
+      const concB = CONCEPTOS.indexOf(b.concepto);
+      return concA - concB;
+    });
+    return arr;
+  }, [pagos, pagosMesActual, tab, fMes, fAno, fLocal, fEst, fConc, fBusq, esAdmin, sortDir]);
+  const gastosFiltrados = useMemo(() => gastos.filter(g => {
+    const f = new Date(g.fecha + 'T00:00:00');
+    if (gMes !== 'todos' && f.getMonth() + 1 !== Number(gMes)) return false;
+    if (gAno !== 'todos' && f.getFullYear() !== Number(gAno)) return false;
+    return true;
+  }), [gastos, gMes, gAno]);
+  const kpis = useMemo(() => {
+    const rec = pagosFiltrados.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const pen = pagosFiltrados.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+    const tot = rec + pen;
+    const mor = tot > 0 ? pen / tot * 100 : 0;
+    const um = new Set(pagosFiltrados.filter(p => p.estatus === 'pendiente').map(p => p.unidadId)).size;
+    return {
+      recaudado: rec,
+      pendiente: pen,
+      morosidad: mor,
+      unidadesMorosas: um
+    };
+  }, [pagosFiltrados]);
+
+  // DONA AGRUPADA: cajón/bodega/tarjetas en un solo segmento
+  const dataDona = useMemo(() => {
+    const map = {};
+    pagosFiltrados.filter(p => p.estatus === 'pagado').forEach(p => {
+      const key = CONCEPTOS_CAJON.includes(p.concepto) ? 'Cajón, Bodega y Tarjetas' : p.concepto;
+      map[key] = (map[key] || 0) + Number(p.monto);
+    });
+    return Object.entries(map).map(([name, value]) => ({
+      name,
+      value
+    }));
+  }, [pagosFiltrados]);
+  const dataBars = useMemo(() => {
+    const map = {};
+    MESES_S.forEach(m => {
+      map[m] = {
+        mes: m,
+        Recaudado: 0,
+        Pendiente: 0
+      };
+    });
+    pagos.filter(p => !p.cancelado && new Date(p.fecha + 'T00:00:00').getFullYear() === Number(fAno === 'todos' ? now.getFullYear() : fAno)).forEach(p => {
+      const m = MESES_S[new Date(p.fecha + 'T00:00:00').getMonth()];
+      if (p.estatus === 'pagado') map[m].Recaudado += Number(p.monto);else map[m].Pendiente += Number(p.monto);
+    });
+    return Object.values(map);
+  }, [pagos, fAno]);
+  const top10 = useMemo(() => {
+    const map = {};
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente').forEach(p => {
+      map[p.unidadId] = (map[p.unidadId] || 0) + Number(p.monto);
+    });
+    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([id, total]) => ({
+      id,
+      total
+    }));
+  }, [pagos]);
+  const totalGastos = useMemo(() => gastosFiltrados.reduce((s, g) => s + Number(g.monto), 0), [gastosFiltrados]);
+  const paginados = useMemo(() => {
+    const s = (pg - 1) * PX;
+    return pagosFiltrados.slice(s, s + PX);
+  }, [pagosFiltrados, pg]);
+  const totalPags = Math.ceil(pagosFiltrados.length / PX);
+  const gastosPag = useMemo(() => {
+    const s = (gPg - 1) * PX;
+    return gastosFiltrados.slice(s, s + PX);
+  }, [gastosFiltrados, gPg]);
+  const totalGPags = Math.ceil(gastosFiltrados.length / PX);
+  const anos = [...new Set(pagos.map(p => new Date(p.fecha + 'T00:00:00').getFullYear()))].sort((a, b) => b - a);
+  if (!anos.includes(now.getFullYear())) anos.unshift(now.getFullYear());
+
+  /* PANTALLAS ESPECIALES */
+  if (!fbReady && !fbError) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      textAlign: 'center'
+    }
+  }, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 40,
+    st: {
+      color: C.navy,
+      margin: '0 auto 12px'
+    }
+  }), /*#__PURE__*/React.createElement("p", {
+    style: {
+      color: C.navy,
+      fontSize: 14,
+      fontWeight: 500
+    }
+  }, "Conectando con Firebase...")));
+  if (fbError) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: C.bg,
+      padding: 24
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      background: '#fff',
+      borderRadius: 16,
+      padding: 24,
+      maxWidth: 440,
+      border: '1px solid #FCA5A5'
+    }
+  }, /*#__PURE__*/React.createElement(I.Alert, {
+    sz: 32,
+    st: {
+      color: C.err,
+      marginBottom: 12
+    }
+  }), /*#__PURE__*/React.createElement("h3", {
+    style: {
+      color: C.err,
+      fontWeight: 700,
+      fontSize: 18,
+      marginBottom: 8
+    }
+  }, "Error de conexi\xF3n"), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 13,
+      color: '#4B5563',
+      marginBottom: 8
+    }
+  }, fbError), /*#__PURE__*/React.createElement("p", {
+    style: {
+      fontSize: 12,
+      color: '#9CA3AF'
+    }
+  }, "Verifica ", /*#__PURE__*/React.createElement("code", {
+    style: {
+      background: '#F3F4F6',
+      padding: '1px 4px',
+      borderRadius: 4
+    }
+  }, "window.firebaseConfig"), ".")));
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      minHeight: '100vh',
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement("header", {
+    style: {
+      background: `linear-gradient(135deg,${C.navy} 0%,${C.navyL} 100%)`,
+      boxShadow: '0 2px 12px rgba(0,0,0,.2)'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between flex-wrap gap-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3"
+  }, /*#__PURE__*/React.createElement("img", {
+    src: window.LOGO_EVA,
+    alt: "EVA",
+    className: "logo-img"
+  }), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("h1", {
+    className: "text-lg sm:text-xl font-bold tracking-wide text-white"
+  }, "EDIFICIO VALLE ALTO"), /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] opacity-60 tracking-widest uppercase text-white"
+  }, "R\xE9gimen de Propiedad en Condominio"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white",
+    style: {
+      background: 'rgba(255,255,255,.1)'
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 13
+  }), "Sync") : online ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Wifi, {
+    sz: 13,
+    st: {
+      color: '#86EFAC'
+    }
+  }), "En l\xEDnea") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.WOff, {
+    sz: 13,
+    st: {
+      color: '#FCA5A5'
+    }
+  }), "Offline")), esAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMReporte(true),
+    className: "p-2 rounded-lg hover:scale-105 transition text-white",
+    style: {
+      background: 'rgba(255,255,255,.1)'
+    },
+    title: "Reporte al Comit\xE9"
+  }, /*#__PURE__*/React.createElement(I.Report, {
+    sz: 16
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMConfig(true),
+    className: "p-2 rounded-lg hover:scale-105 transition text-white",
+    style: {
+      background: 'rgba(255,255,255,.1)'
+    },
+    title: "Configuraci\xF3n"
+  }, /*#__PURE__*/React.createElement(I.Set, {
+    sz: 16
+  }))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => esAdmin ? setEsAdmin(false) : setMAuth(true),
+    className: "p-2 rounded-lg hover:scale-105 transition",
+    style: {
+      background: esAdmin ? C.gold : 'rgba(255,255,255,.1)',
+      color: esAdmin ? C.navy : 'white'
+    },
+    title: esAdmin ? 'Cerrar sesión admin' : 'Acceso admin'
+  }, esAdmin ? /*#__PURE__*/React.createElement(I.Unlock, {
+    sz: 18
+  }) : /*#__PURE__*/React.createElement(I.Lock, {
+    sz: 18
+  }))))), /*#__PURE__*/React.createElement("main", {
+    className: "max-w-7xl mx-auto px-4 sm:px-6 py-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-0 mb-6 border-b border-gray-200 bg-white rounded-t-xl shadow-sm overflow-x-auto"
+  }, [['actual', `Mes Actual (${MESES_L[now.getMonth()].slice(0, 3)})`], ['historico', 'Histórico'], ['morosos', 'Top Morosos'], ['gastos', 'Gastos']].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    onClick: () => setTab(k),
+    className: `px-4 sm:px-5 py-3.5 text-sm whitespace-nowrap transition ${tab === k ? 'tab-active' : 'tab-inactive hover:text-gray-600'}`
+  }, l))), (tab === 'actual' || tab === 'historico') && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement(I.Filter, {
+    sz: 15,
+    st: {
+      color: C.navy
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-semibold",
+    style: {
+      color: C.navy
+    }
+  }, "FILTROS")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setSortDir(d => d === 'desc' ? 'asc' : 'desc'),
+    className: "flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 transition",
+    style: {
+      color: C.oxford
+    }
+  }, sortDir === 'desc' ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.ChevD, {
+    sz: 13
+  }), "M\xE1s reciente") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.ChevU, {
+    sz: 13
+  }), "M\xE1s antiguo"))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2"
+  }, tab === 'historico' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("select", {
+    value: fMes,
+    onChange: e => setFMes(e.target.value),
+    className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos meses"), MESES_L.map((m, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i + 1
+  }, m))), /*#__PURE__*/React.createElement("select", {
+    value: fAno,
+    onChange: e => setFAno(e.target.value),
+    className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos a\xF1os"), anos.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a)))), /*#__PURE__*/React.createElement("select", {
+    value: fLocal,
+    onChange: e => setFLocal(e.target.value),
+    className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos locales"), unidades.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.id
+  }, u.codigo))), /*#__PURE__*/React.createElement("select", {
+    value: fConc,
+    onChange: e => setFConc(e.target.value),
+    className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos conceptos"), CONCEPTOS.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c))), /*#__PURE__*/React.createElement("select", {
+    value: fEst,
+    onChange: e => setFEst(e.target.value),
+    className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos estatus"), /*#__PURE__*/React.createElement("option", {
+    value: "pagado"
+  }, "Pagados"), /*#__PURE__*/React.createElement("option", {
+    value: "pendiente"
+  }, "Pendientes")), /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, /*#__PURE__*/React.createElement(I.Search, {
+    sz: 13,
+    cls: "absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    placeholder: "Buscar...",
+    value: fBusq,
+    onChange: e => setFBusq(e.target.value),
+    className: "w-full pl-8 pr-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5"
+  }, /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.TrUp, {
+      sz: 22
+    }),
+    label: "Total Recaudado",
+    value: fmt(kpis.recaudado),
+    color: C.ok,
+    grad: `linear-gradient(135deg,${C.navy},${C.navyL})`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.TrDn, {
+      sz: 22
+    }),
+    label: "Total Pendiente",
+    value: fmt(kpis.pendiente),
+    color: kpis.pendiente > 0 ? C.err : '#9CA3AF',
+    grad: `linear-gradient(135deg,${C.oxford},${C.oxfordL})`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Alert, {
+      sz: 22
+    }),
+    label: "% Morosidad",
+    value: `${kpis.morosidad.toFixed(1)}%`,
+    color: C.warn,
+    grad: `linear-gradient(135deg,${C.navy},${C.oxford})`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Users, {
+      sz: 22
+    }),
+    label: "Unidades Morosas",
+    value: kpis.unidadesMorosas,
+    sub: `de ${unidades.length} totales`,
+    color: C.gold,
+    grad: `linear-gradient(135deg,${C.navyL},${C.navy})`
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-200 p-5"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide mb-4",
+    style: {
+      color: C.navy
+    }
+  }, "INGRESOS MENSUALES \u2014 ", fAno === 'todos' ? now.getFullYear() : fAno), /*#__PURE__*/React.createElement(ResponsiveContainer, {
+    width: "100%",
+    height: 250
+  }, /*#__PURE__*/React.createElement(BarChart, {
+    data: dataBars
+  }, /*#__PURE__*/React.createElement(CartesianGrid, {
+    strokeDasharray: "3 3",
+    stroke: "#E5E7EB"
+  }), /*#__PURE__*/React.createElement(XAxis, {
+    dataKey: "mes",
+    tick: {
+      fontSize: 11,
+      fill: C.oxford
+    }
+  }), /*#__PURE__*/React.createElement(YAxis, {
+    tick: {
+      fontSize: 11,
+      fill: C.oxford
+    },
+    tickFormatter: fmtK
+  }), /*#__PURE__*/React.createElement(Tooltip, {
+    formatter: v => `$${Number(v).toLocaleString('es-MX')}`,
+    contentStyle: {
+      borderRadius: 8,
+      border: `1px solid ${C.navy}`,
+      fontSize: 12
+    }
+  }), /*#__PURE__*/React.createElement(Legend, {
+    wrapperStyle: {
+      fontSize: 12
+    }
+  }), /*#__PURE__*/React.createElement(Bar, {
+    dataKey: "Recaudado",
+    fill: C.navy,
+    radius: [4, 4, 0, 0]
+  }), /*#__PURE__*/React.createElement(Bar, {
+    dataKey: "Pendiente",
+    fill: C.gold,
+    radius: [4, 4, 0, 0]
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 p-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-1"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide",
+    style: {
+      color: C.navy
+    }
+  }, "DESGLOSE POR CONCEPTO")), /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] text-gray-400 mb-3"
+  }, "Estacionamiento, tarjetas y bodegas agrupados como \"Caj\xF3n, Bodega y Tarjetas\""), dataDona.length > 0 ? /*#__PURE__*/React.createElement(ResponsiveContainer, {
+    width: "100%",
+    height: 230
+  }, /*#__PURE__*/React.createElement(PieChart, null, /*#__PURE__*/React.createElement(Pie, {
+    data: dataDona,
+    cx: "50%",
+    cy: "45%",
+    innerRadius: 45,
+    outerRadius: 85,
+    paddingAngle: 2,
+    dataKey: "value"
+  }, dataDona.map((_, i) => /*#__PURE__*/React.createElement(Cell, {
+    key: i,
+    fill: PIE_COLORS[i % PIE_COLORS.length]
+  }))), /*#__PURE__*/React.createElement(Tooltip, {
+    formatter: v => `$${Number(v).toLocaleString('es-MX')}`,
+    contentStyle: {
+      borderRadius: 8,
+      fontSize: 10
+    }
+  }), /*#__PURE__*/React.createElement(Legend, {
+    wrapperStyle: {
+      fontSize: 9
+    }
+  }))) : /*#__PURE__*/React.createElement("div", {
+    className: "h-[230px] flex items-center justify-center text-gray-400 text-sm"
+  }, "Sin datos"))), /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-2 mb-4"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMReg(true),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm shadow-sm hover:shadow-md transition hover:scale-[1.02]",
+    style: {
+      background: C.navy
+    }
+  }, /*#__PURE__*/React.createElement(I.Plus, {
+    sz: 15
+  }), "Registrar Pago"), /*#__PURE__*/React.createElement("button", {
+    onClick: exportarExcel,
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 bg-white hover:bg-gray-50 transition",
+    style: {
+      color: C.oxford
+    }
+  }, /*#__PURE__*/React.createElement(I.Sheet, {
+    sz: 15
+  }), "Excel"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => tab === 'actual' ? setMExportPDF(true) : exportarPDF('todos'),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 bg-white hover:bg-gray-50 transition",
+    style: {
+      color: C.oxford
+    }
+  }, /*#__PURE__*/React.createElement(I.DL, {
+    sz: 15
+  }), "PDF"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMEdo(true),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm hover:shadow-md transition",
+    style: {
+      background: C.gold,
+      color: C.navy
+    }
+  }, /*#__PURE__*/React.createElement(I.File, {
+    sz: 15
+  }), "Estado de Cuenta"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMImport(true),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 bg-white hover:bg-gray-50 transition",
+    style: {
+      color: C.oxford
+    }
+  }, /*#__PURE__*/React.createElement(I.Up, {
+    sz: 15
+  }), "Importar Excel")), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-5 py-3 border-b border-gray-200 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide",
+    style: {
+      color: C.navy
+    }
+  }, "REGISTROS (", pagosFiltrados.length, ")"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs text-gray-500"
+  }, "P\xE1g. ", pg, "/", totalPags || 1)), /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto scrollbar-thin"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-sm min-w-[740px]"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: {
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Concepto', 'Monto', 'Fecha', 'Folio', 'Estatus', 'Acciones'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: `px-4 py-3 font-semibold text-xs uppercase tracking-wider ${h === 'Monto' ? 'text-right' : h === 'Estatus' || h === 'Acciones' ? 'text-center' : 'text-left'}`,
+    style: {
+      color: C.navy
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, paginados.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 7,
+    className: "px-4 py-10 text-center text-gray-400"
+  }, "Sin registros")) : paginados.map(p => /*#__PURE__*/React.createElement("tr", {
+    key: p.id,
+    className: `border-t border-gray-100 hover:bg-blue-50/30 transition-colors ${p.cancelado ? 'opacity-50' : ''}`
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 font-semibold",
+    style: {
+      color: C.navy
+    }
+  }, p.unidadId, p.cancelado && /*#__PURE__*/React.createElement("span", {
+    className: "ml-1 text-[10px] bg-red-100 text-red-700 px-1 py-0.5 rounded"
+  }, "CANCEL.")), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-gray-700 text-xs"
+  }, p.concepto), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-right font-medium"
+  }, editId === p.id && esAdmin ? /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-end gap-1"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: editMonto,
+    onChange: e => setEditMonto(e.target.value),
+    className: "w-24 px-2 py-1 border border-gray-300 rounded text-sm",
+    autoFocus: true,
+    onKeyDown: e => e.key === 'Enter' && guardarMonto(p.id)
+  }), /*#__PURE__*/React.createElement("button", {
+    onClick: () => guardarMonto(p.id),
+    className: "p-1 rounded hover:bg-green-50"
+  }, /*#__PURE__*/React.createElement(I.Check, {
+    sz: 13,
+    st: {
+      color: C.ok
+    }
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setEditId(null),
+    className: "p-1 rounded hover:bg-red-50"
+  }, /*#__PURE__*/React.createElement(I.X, {
+    sz: 13,
+    st: {
+      color: C.err
+    }
+  }))) : /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-800"
+  }, fmt(p.monto))), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-gray-600 text-xs"
+  }, p.fecha), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-gray-600 font-mono text-xs"
+  }, p.folio), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-center"
+  }, /*#__PURE__*/React.createElement("span", {
+    onClick: () => !p.cancelado && toggleEst(p.id),
+    className: `inline-block px-2.5 py-1 rounded-full text-xs font-semibold transition ${p.estatus === 'pagado' ? 'badge-ok' : 'badge-p'}`,
+    title: p.estatus === 'pendiente' ? 'Click para marcar como pagado' : ''
+  }, p.estatus.toUpperCase())), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-center"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-center gap-1.5"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => genEdoCuenta({
+      uids: [p.unidadId],
+      mesD: 1,
+      anoD: now.getFullYear(),
+      mesH: 12,
+      anoH: now.getFullYear(),
+      tipo: 'ambos'
+    }),
+    className: "p-1.5 rounded hover:bg-gray-100 transition",
+    title: "Edo. cuenta"
+  }, /*#__PURE__*/React.createElement(I.File, {
+    sz: 13,
+    st: {
+      color: C.navy
+    }
+  })), esAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setEditId(p.id);
+      setEditMonto(p.monto);
+    },
+    className: "p-1.5 rounded hover:bg-blue-50 transition",
+    title: "Editar monto"
+  }, /*#__PURE__*/React.createElement(I.Edit, {
+    sz: 13,
+    st: {
+      color: '#2563EB'
+    }
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => cancelar(p.id),
+    className: "p-1.5 rounded hover:bg-red-50 transition",
+    title: "Cancelar registro"
+  }, /*#__PURE__*/React.createElement(I.Trash, {
+    sz: 13,
+    st: {
+      color: C.err
+    }
+  })))))))))), totalPags > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "px-5 py-3 border-t border-gray-200 flex items-center justify-between text-sm"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPg(p => Math.max(1, p - 1)),
+    disabled: pg === 1,
+    className: "px-3 py-1.5 rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-50 transition"
+  }, "Anterior"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1"
+  }, Array.from({
+    length: totalPags
+  }, (_, i) => i + 1).slice(Math.max(0, pg - 3), pg + 2).map(n => /*#__PURE__*/React.createElement("button", {
+    key: n,
+    onClick: () => setPg(n),
+    className: `w-8 h-8 rounded text-sm transition ${n === pg ? 'text-white' : 'hover:bg-gray-100'}`,
+    style: {
+      background: n === pg ? C.navy : 'transparent'
+    }
+  }, n))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setPg(p => Math.min(totalPags, p + 1)),
+    disabled: pg === totalPags,
+    className: "px-3 py-1.5 rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-50 transition"
+  }, "Siguiente")))), tab === 'morosos' && /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 p-6"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-5"
+  }, /*#__PURE__*/React.createElement(I.Award, {
+    sz: 20,
+    st: {
+      color: C.gold
+    }
+  }), /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide",
+    style: {
+      color: C.navy
+    }
+  }, "TOP 10 \u2014 LOCALES CON MAYOR ADEUDO ACUMULADO")), top10.length === 0 ? /*#__PURE__*/React.createElement("div", {
+    className: "py-16 text-center text-gray-400"
+  }, /*#__PURE__*/React.createElement(I.Check, {
+    sz: 40,
+    cls: "mx-auto mb-3",
+    st: {
+      color: '#D1FAE5'
+    }
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "font-medium"
+  }, "\xA1Sin adeudos!")) : /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, top10.map((m, i) => {
+    const pct = Math.round(m.total / top10[0].total * 100);
+    const med = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : i + 1 + '.';
+    return /*#__PURE__*/React.createElement("div", {
+      key: m.id,
+      className: "flex items-center gap-4"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "w-8 text-center font-bold text-sm",
+      style: {
+        color: C.navy
+      }
+    }, med), /*#__PURE__*/React.createElement("div", {
+      className: "w-14 font-semibold text-sm",
+      style: {
+        color: C.navy
+      }
+    }, m.id), /*#__PURE__*/React.createElement("div", {
+      className: "flex-1"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex justify-between mb-1"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "text-xs text-gray-500"
+    }, "Adeudo"), /*#__PURE__*/React.createElement("span", {
+      className: "text-xs font-bold",
+      style: {
+        color: C.err
+      }
+    }, fmt(m.total))), /*#__PURE__*/React.createElement("div", {
+      className: "h-2 bg-gray-100 rounded-full overflow-hidden"
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "h-full rounded-full",
+      style: {
+        width: pct + '%',
+        background: 'linear-gradient(90deg,' + C.navy + ',' + C.gold + ')'
+      }
+    }))));
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "pt-4 border-t border-gray-100 flex justify-between text-sm"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-500"
+  }, "Total adeudado"), /*#__PURE__*/React.createElement("span", {
+    className: "font-bold",
+    style: {
+      color: C.err
+    }
+  }, fmt(top10.reduce((s, m) => s + m.total, 0)))))), tab === 'gastos' && /*#__PURE__*/React.createElement("div", {
+    className: "space-y-5"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-3 gap-4"
+  }, /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Wallet, {
+      sz: 22
+    }),
+    label: "Total Gastos Operativos",
+    value: fmt(gastosFiltrados.filter(g => g.tipoGasto === 'operativo' || !g.tipoGasto).reduce((s, g) => s + Number(g.monto), 0)),
+    color: C.oxford,
+    grad: `linear-gradient(135deg,${C.oxford},${C.oxfordL})`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Wallet, {
+      sz: 22
+    }),
+    label: "Total Gastos Extraordinarios",
+    value: fmt(gastosFiltrados.filter(g => g.tipoGasto === 'extraordinario').reduce((s, g) => s + Number(g.monto), 0)),
+    color: C.warn,
+    grad: `linear-gradient(135deg,#B8860B,#8B6914)`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Wallet, {
+      sz: 22
+    }),
+    label: "Total Gastos (per\xEDodo)",
+    value: fmt(totalGastos),
+    color: C.err,
+    grad: `linear-gradient(135deg,${C.err},#8B1A2A)`
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 p-5"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide mb-4",
+    style: {
+      color: C.navy
+    }
+  }, "REGISTRAR NUEVO GASTO"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-3"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Fecha *"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: gastoForm.fecha,
+    onChange: e => setGastoForm({
+      ...gastoForm,
+      fecha: e.target.value
+    }),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Concepto / Categor\xEDa *"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: gastoForm.concepto,
+    onChange: e => setGastoForm({
+      ...gastoForm,
+      concepto: e.target.value
+    }),
+    placeholder: "Ej. Limpieza",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Monto *"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: gastoForm.monto,
+    onChange: e => setGastoForm({
+      ...gastoForm,
+      monto: e.target.value
+    }),
+    placeholder: "0.00",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Tipo de gasto *"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: gastoForm.tipoGasto,
+    onChange: e => setGastoForm({
+      ...gastoForm,
+      tipoGasto: e.target.value
+    }),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "operativo"
+  }, "Operativo"), /*#__PURE__*/React.createElement("option", {
+    value: "extraordinario"
+  }, "Extraordinario"))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Descripci\xF3n"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: gastoForm.descripcion,
+    onChange: e => setGastoForm({
+      ...gastoForm,
+      descripcion: e.target.value
+    }),
+    placeholder: "Detalle",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: guardarGasto,
+    disabled: syncing,
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 disabled:opacity-50",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 15
+  }), "Guardando...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Plus, {
+    sz: 15
+  }), "Registrar")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMImportG(true),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 bg-white hover:bg-gray-50 transition",
+    style: {
+      color: C.oxford
+    }
+  }, /*#__PURE__*/React.createElement(I.Up, {
+    sz: 15
+  }), "Importar Excel"))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 p-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 mb-3"
+  }, /*#__PURE__*/React.createElement(I.Filter, {
+    sz: 15,
+    st: {
+      color: C.navy
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-semibold",
+    style: {
+      color: C.navy
+    }
+  }, "FILTRAR GASTOS")), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-3 flex-wrap"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: gMes,
+    onChange: e => setGMes(e.target.value),
+    className: "px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos los meses"), MESES_L.map((m, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i + 1
+  }, m))), /*#__PURE__*/React.createElement("select", {
+    value: gAno,
+    onChange: e => setGAno(e.target.value),
+    className: "px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos los a\xF1os"), anos.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a))))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-5 py-3 border-b border-gray-200 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide",
+    style: {
+      color: C.navy
+    }
+  }, "GASTOS (", gastosFiltrados.length, ")"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs text-gray-500"
+  }, "P\xE1g. ", gPg, "/", totalGPags || 1)), /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto scrollbar-thin"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-sm min-w-[600px]"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: {
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement("tr", null, ['Fecha', 'Concepto', 'Tipo', 'Descripción', 'Monto', ...(esAdmin ? ['Acc.'] : [''])].filter(Boolean).map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: `px-4 py-3 font-semibold text-xs uppercase tracking-wider ${h === 'Monto' || h === 'Acc.' ? 'text-center' : 'text-left'}`,
+    style: {
+      color: C.navy
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, gastosPag.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 6,
+    className: "px-4 py-10 text-center text-gray-400"
+  }, "Sin gastos")) : gastosPag.map(g => /*#__PURE__*/React.createElement("tr", {
+    key: g.id,
+    className: "border-t border-gray-100 hover:bg-red-50/20 transition-colors"
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-gray-600 text-xs"
+  }, g.fecha), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 font-medium text-gray-800"
+  }, g.concepto), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-center"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${g.tipoGasto === 'extraordinario' ? 'badge-ex' : 'badge-op'}`
+  }, g.tipoGasto === 'extraordinario' ? 'Extraord.' : 'Operativo')), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-gray-500 text-xs"
+  }, g.descripcion || '—'), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-right font-bold",
+    style: {
+      color: C.err
+    }
+  }, fmt(g.monto)), esAdmin && /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-center"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => eliminarGasto(g.id),
+    className: "p-1.5 rounded hover:bg-red-50 transition"
+  }, /*#__PURE__*/React.createElement(I.Trash, {
+    sz: 13,
+    st: {
+      color: C.err
+    }
+  })))))))), totalGPags > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "px-5 py-3 border-t border-gray-200 flex items-center justify-between text-sm"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setGPg(p => Math.max(1, p - 1)),
+    disabled: gPg === 1,
+    className: "px-3 py-1.5 rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-50 transition"
+  }, "Anterior"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1"
+  }, Array.from({
+    length: totalGPags
+  }, (_, i) => i + 1).slice(Math.max(0, gPg - 3), gPg + 2).map(n => /*#__PURE__*/React.createElement("button", {
+    key: n,
+    onClick: () => setGPg(n),
+    className: `w-8 h-8 rounded text-sm transition ${n === gPg ? 'text-white' : 'hover:bg-gray-100'}`,
+    style: {
+      background: n === gPg ? C.navy : 'transparent'
+    }
+  }, n))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setGPg(p => Math.min(totalGPags, p + 1)),
+    disabled: gPg === totalGPags,
+    className: "px-3 py-1.5 rounded border border-gray-300 disabled:opacity-40 hover:bg-gray-50 transition"
+  }, "Siguiente")))), /*#__PURE__*/React.createElement("footer", {
+    className: "text-center text-xs text-gray-400 mt-6 py-3"
+  }, "Edificio Valle Alto \xB7 Sistema de Administraci\xF3n \xB7 Sincronizado con Firebase")), mReg && /*#__PURE__*/React.createElement(ModalReg, {
+    unidades: unidades,
+    onClose: () => setMReg(false),
+    onSave: guardarPagos,
+    syncing: syncing
+  }), mEdo && /*#__PURE__*/React.createElement(ModalEdo, {
+    unidades: unidades,
+    onClose: () => setMEdo(false),
+    onGen: genEdoCuenta
+  }), mImport && /*#__PURE__*/React.createElement(ModalImport, {
+    onClose: () => setMImport(false),
+    onImport: importarPagos,
+    syncing: syncing,
+    tipo: "pagos"
+  }), mImportG && /*#__PURE__*/React.createElement(ModalImport, {
+    onClose: () => setMImportG(false),
+    onImport: importarGastos,
+    syncing: syncing,
+    tipo: "gastos"
+  }), mReporte && /*#__PURE__*/React.createElement(ModalReportePresent, {
+    onClose: () => setMReporte(false),
+    onGen: genReportePresent
+  }), mExportPDF && /*#__PURE__*/React.createElement(ModalExportPDF, {
+    onClose: () => setMExportPDF(false),
+    onExport: exportarPDF
+  }), mAuth && /*#__PURE__*/React.createElement(Modal, {
+    title: "Acceso de Administrador",
+    onClose: () => {
+      setMAuth(false);
+      setAuthErr('');
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-gray-600 mb-4"
+  }, "Ingrese la contrase\xF1a para activar privilegios."), /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    id: "ap",
+    placeholder: "Contrase\xF1a",
+    autoFocus: true,
+    onKeyDown: e => e.key === 'Enter' && autenticar(e.target.value),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none mb-2"
+  }), authErr && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs mb-2",
+    style: {
+      color: C.err
+    }
+  }, authErr), /*#__PURE__*/React.createElement("button", {
+    onClick: () => autenticar(document.getElementById('ap').value),
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
+    style: {
+      background: C.navy
+    }
+  }, "Autenticar"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-400 mt-3 text-center"
+  }, "Contrase\xF1a inicial: ", /*#__PURE__*/React.createElement("code", {
+    className: "bg-gray-100 px-1 rounded"
+  }, "4321"))), mConfig && esAdmin && /*#__PURE__*/React.createElement(Modal, {
+    title: "Configuraci\xF3n de Administrador",
+    onClose: () => setMConfig(false)
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Nueva contrase\xF1a (m\xEDnimo 4 caracteres)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "password",
+    id: "np",
+    placeholder: "Nueva contrase\xF1a",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => cambiarPwd(document.getElementById('np').value),
+    className: "w-full mt-3 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
+    style: {
+      background: C.navy
+    }
+  }, "Actualizar contrase\xF1a")), /*#__PURE__*/React.createElement(Toast, {
+    msg: toast.msg,
+    type: toast.type
+  }));
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(/*#__PURE__*/React.createElement(App, null));
+
+</script>
+</body>
+</html>
+  PieChart,
+  Pie,
+  Cell
+} = Recharts;
+
+/* ─── PALETA ─────────────────────────────────────── */
+const C = {
+  navy: '#0B2545',
+  navyL: '#13315C',
+  oxford: '#2C2F36',
+  oxfordL: '#4A4E58',
+  gold: '#C9A961',
+  bg: '#F4F5F7',
+  ok: '#1B7F5A',
+  err: '#A6273A',
+  warn: '#B8860B'
+};
+const PIE_COLORS = ['#0B2545', '#C9A961', '#2C2F36', '#1B7F5A', '#E07B39', '#0E6BA8', '#6B4E71'];
+
+/* Conceptos que se agrupan en "Cajón, Bodega y Tarjetas" en la dona del dashboard */
+const CONCEPTOS_CAJON = ['Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Otros'];
+const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+const MESES_L = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+const MESES_S = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
+
+/* ─── UNIDADES ───────────────────────────────────── */
+const generarUnidades = () => {
+  const u = [];
+  for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) {
+    const c = `${p}${n.toString().padStart(2, '0')}`;
+    u.push({
+      id: c,
+      codigo: c,
+      tipo: 'departamento',
+      piso: p
+    });
+  }
+  u.push({
+    id: 'PB2',
+    codigo: 'PB2',
+    tipo: 'local',
+    piso: 0
+  }, {
+    id: 'PB3',
+    codigo: 'PB3',
+    tipo: 'local',
+    piso: 0
+  }, {
+    id: 'P8',
+    codigo: 'Piso 8',
+    tipo: 'local',
+    piso: 8
+  });
+  return u;
+};
+
+/* ─── UTILS ──────────────────────────────────────── */
+const hashPwd = async p => {
+  const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(p));
+  return Array.from(new Uint8Array(b)).map(x => x.toString(16).padStart(2, '0')).join('');
+};
+const loadJS = src => new Promise((res, rej) => {
+  if (document.querySelector(`script[src="${src}"]`)) return res();
+  const s = document.createElement('script');
+  s.src = src;
+  s.onload = res;
+  s.onerror = rej;
+  document.body.appendChild(s);
+});
+const fmt = n => '$' + Number(n).toLocaleString('es-MX', {
+  minimumFractionDigits: 2
+});
+// Convierte fecha de Excel (número serial o string) a YYYY-MM-DD
+const excelFecha = v => {
+  if (!v) return new Date().toISOString().split('T')[0];
+  // Si ya es string con formato fecha (contiene - o /)
+  if (typeof v === 'string' && (v.includes('-') || v.includes('/'))) {
+    const parts = v.includes('-') ? v.split('-') : v.split('/');
+    if (parts[0].length === 4) return v.split('T')[0]; // ya es YYYY-MM-DD
+    // es DD/MM/YYYY o MM/DD/YYYY
+    const d = new Date(v);
+    if (!isNaN(d)) return d.toISOString().split('T')[0];
+    return v;
+  }
+  // Si es número serial de Excel (ej. 46122)
+  const num = Number(v);
+  if (!isNaN(num) && num > 40000) {
+    const d = new Date((num - 25569) * 86400 * 1000);
+    return d.toISOString().split('T')[0];
+  }
+  return String(v);
+};
+const fmtK = n => n >= 1000 ? '$' + (n / 1000).toFixed(0) + 'k' : '$' + n;
+
+/* ─── ICONOS ─────────────────────────────────────── */
+const Ic = ({
+  d,
+  sz = 16,
+  cls = '',
+  st = {}
+}) => /*#__PURE__*/React.createElement("svg", {
+  xmlns: "http://www.w3.org/2000/svg",
+  width: sz,
+  height: sz,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: "2",
+  strokeLinecap: "round",
+  strokeLinejoin: "round",
+  className: cls,
+  style: st,
+  dangerouslySetInnerHTML: {
+    __html: d
+  }
+});
+const I = {
+  Plus: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M5 12h14\"/><path d=\"M12 5v14\"/>"
+  })),
+  Minus: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M5 12h14\"/>"
+  })),
+  X: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/>"
+  })),
+  Lock: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 10 0v4\"/>"
+  })),
+  Unlock: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<rect width=\"18\" height=\"11\" x=\"3\" y=\"11\" rx=\"2\"/><path d=\"M7 11V7a5 5 0 0 1 9.9-1\"/>"
+  })),
+  Search: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<circle cx=\"11\" cy=\"11\" r=\"8\"/><path d=\"m21 21-4.3-4.3\"/>"
+  })),
+  Filter: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<polygon points=\"22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3\"/>"
+  })),
+  Trash: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M3 6h18\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/>"
+  })),
+  Edit: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\"/><path d=\"M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z\"/>"
+  })),
+  File: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><polyline points=\"14 2 14 8 20 8\"/><line x1=\"16\" x2=\"8\" y1=\"13\" y2=\"13\"/><line x1=\"16\" x2=\"8\" y1=\"17\" y2=\"17\"/>"
+  })),
+  Sheet: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><polyline points=\"14 2 14 8 20 8\"/><path d=\"M8 13h2\"/><path d=\"M14 13h2\"/><path d=\"M8 17h2\"/><path d=\"M14 17h2\"/>"
+  })),
+  DL: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"7 10 12 15 17 10\"/><line x1=\"12\" x2=\"12\" y1=\"15\" y2=\"3\"/>"
+  })),
+  Up: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\"/><polyline points=\"17 8 12 3 7 8\"/><line x1=\"12\" x2=\"12\" y1=\"3\" y2=\"15\"/>"
+  })),
+  Wifi: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M5 13a10 10 0 0 1 14 0\"/><path d=\"M8.5 16.5a5 5 0 0 1 7 0\"/><path d=\"M2 8.82a15 15 0 0 1 20 0\"/><line x1=\"12\" x2=\"12.01\" y1=\"20\" y2=\"20\"/>"
+  })),
+  WOff: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M12 20h.01\"/><path d=\"M8.5 16.429a5 5 0 0 1 7 0\"/><path d=\"M5 12.859a10 10 0 0 1 5.17-2.69\"/><path d=\"M19 12.859a10 10 0 0 0-2.007-1.523\"/><path d=\"M2 8.82a15 15 0 0 1 4.177-2.643\"/><path d=\"M22 8.82a15 15 0 0 0-11.288-3.764\"/><path d=\"m2 2 20 20\"/>"
+  })),
+  Spin: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M21 12a9 9 0 1 1-6.219-8.56\"/>",
+    cls: `${p.cls || ''} spin`
+  })),
+  Set: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\"/>"
+  })),
+  Hist: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\"/><path d=\"M3 3v5h5\"/><path d=\"M12 7v5l4 2\"/>"
+  })),
+  Award: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<circle cx=\"12\" cy=\"8\" r=\"6\"/><path d=\"M15.477 12.89 17 22l-5-3-5 3 1.523-9.11\"/>"
+  })),
+  TrUp: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<polyline points=\"22 7 13.5 15.5 8.5 10.5 2 17\"/><polyline points=\"16 7 22 7 22 13\"/>"
+  })),
+  TrDn: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<polyline points=\"22 17 13.5 8.5 8.5 13.5 2 7\"/><polyline points=\"16 17 22 17 22 11\"/>"
+  })),
+  Alert: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<circle cx=\"12\" cy=\"12\" r=\"10\"/><line x1=\"12\" x2=\"12\" y1=\"8\" y2=\"12\"/><line x1=\"12\" x2=\"12.01\" y1=\"16\" y2=\"16\"/>"
+  })),
+  Users: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/>"
+  })),
+  Check: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M20 6 9 17l-5-5\"/>"
+  })),
+  ChevD: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"m6 9 6 6 6-6\"/>"
+  })),
+  ChevU: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"m18 15-6-6-6 6\"/>"
+  })),
+  Wallet: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M21 12V7H5a2 2 0 0 1 0-4h14v4\"/><path d=\"M3 5v14a2 2 0 0 0 2 2h16v-5\"/><path d=\"M18 12a2 2 0 0 0 0 4h4v-4Z\"/>"
+  })),
+  Report: p => /*#__PURE__*/React.createElement(Ic, _extends({}, p, {
+    d: "<path d=\"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\"/><polyline points=\"14 2 14 8 20 8\"/><path d=\"M16 13H8\"/><path d=\"M16 17H8\"/><path d=\"M10 9H8\"/>"
+  }))
+};
+
+/* ─── SUBCOMPONENTES ─────────────────────────────── */
+function Toast({
+  msg,
+  type
+}) {
+  if (!msg) return null;
+  const bg = type === 'ok' ? '#1B7F5A' : type === 'err' ? '#A6273A' : '#0B2545';
+  return /*#__PURE__*/React.createElement("div", {
+    className: "toast",
+    style: {
+      backgroundColor: bg,
+      color: '#fff'
+    }
+  }, msg);
+}
+function Lbl({
+  text,
+  children
+}) {
+  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("label", {
+    className: "block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide"
+  }, text), children);
+}
+function KPI({
+  icon,
+  label,
+  value,
+  sub,
+  color,
+  grad
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "rounded-xl shadow-sm border border-gray-200 overflow-hidden bg-white hover:shadow-md hover:-translate-y-0.5 transition-all"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-4 flex items-center justify-between text-white",
+    style: {
+      background: grad
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs uppercase tracking-widest opacity-80"
+  }, label), /*#__PURE__*/React.createElement("div", {
+    className: "p-1.5 rounded-lg bg-white/10"
+  }, icon)), /*#__PURE__*/React.createElement("div", {
+    className: "px-4 py-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-2xl font-bold",
+    style: {
+      color
+    }
+  }, value), sub && /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500 mt-1"
+  }, sub)));
+}
+function Modal({
+  title,
+  onClose,
+  children,
+  wide = false,
+  extraWide = false
+}) {
+  const w = extraWide ? 'max-w-4xl' : wide ? 'max-w-2xl' : 'max-w-md';
+  return /*#__PURE__*/React.createElement("div", {
+    className: "fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `bg-white rounded-xl shadow-2xl w-full max-h-[92vh] overflow-y-auto ${w}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-5 py-4 flex items-center justify-between sticky top-0 z-10",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-white text-sm tracking-wide"
+  }, title), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose
+  }, /*#__PURE__*/React.createElement(I.X, {
+    sz: 18,
+    st: {
+      color: 'rgba(255,255,255,.7)'
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "p-5"
+  }, children)));
+}
+
+/* ─── SELECTOR MULTI-LOCAL ───────────────────────── */
+function MultiLocalSelect({
+  selected,
+  onChange,
+  unidades
+}) {
+  const [open, setOpen] = useState(false);
+  const toggle = id => onChange(selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
+  const label = selected.length === 0 ? 'Seleccionar locales...' : selected.length === 1 ? selected[0] : selected.length + ' locales seleccionados';
+  return /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    onClick: () => setOpen(!open),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-left flex items-center justify-between focus:ring-2 focus:outline-none bg-white"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: selected.length === 0 ? 'text-gray-400' : 'text-gray-800'
+  }, label), /*#__PURE__*/React.createElement(I.ChevD, {
+    sz: 14,
+    st: {
+      color: '#6B7280'
+    }
+  })), open && /*#__PURE__*/React.createElement("div", {
+    className: "absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl max-h-64 overflow-y-auto"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-2 border-b border-gray-100"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => onChange([]),
+    className: "text-xs text-gray-500 hover:text-red-600 transition"
+  }, "Limpiar selecci\xF3n")), /*#__PURE__*/React.createElement("div", {
+    className: "p-2"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-2 mb-1"
+  }, "Locales Especiales"), unidades.filter(u => u.tipo === 'local').map(u => /*#__PURE__*/React.createElement("label", {
+    key: u.id,
+    className: `flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-50 transition text-sm ${selected.includes(u.id) ? 'bg-blue-50 text-blue-800 font-medium' : ''}`
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selected.includes(u.id),
+    onChange: () => toggle(u.id),
+    className: "rounded"
+  }), u.codigo)), [1, 2, 3, 4, 5, 6, 7].map(p => /*#__PURE__*/React.createElement("div", {
+    key: p
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-2 mt-2 mb-1"
+  }, "Piso ", p), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-4 gap-1"
+  }, unidades.filter(u => u.piso === p).map(u => /*#__PURE__*/React.createElement("label", {
+    key: u.id,
+    className: `flex items-center justify-center px-1 py-1 rounded cursor-pointer text-xs border transition ${selected.includes(u.id) ? 'bg-blue-800 text-white border-blue-800' : 'border-gray-200 hover:border-gray-400'}`
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: selected.includes(u.id),
+    onChange: () => toggle(u.id),
+    className: "sr-only"
+  }), u.codigo)))))), /*#__PURE__*/React.createElement("div", {
+    className: "p-2 border-t border-gray-100 sticky bottom-0 bg-white"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setOpen(false),
+    className: "w-full py-1.5 rounded-lg text-white text-xs font-medium",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, "Confirmar (", selected.length, ")"))));
+}
+
+/* ─── MODAL REGISTRO PAGOS MULTI-LOCAL ───────────── */
+function ModalReg({
+  unidades,
+  onClose,
+  onSave,
+  syncing
+}) {
+  const [uids, setUids] = useState([]);
+  const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
+  const [folio, setFolio] = useState('');
+  const [parcial, setParcial] = useState(false);
+  const [lineas, setLineas] = useState([{
+    concepto: CONCEPTOS[0],
+    monto: '',
+    pagado: true
+  }]);
+  const total = lineas.reduce((s, l) => s + Number(l.monto || 0), 0);
+  const addL = () => setLineas([...lineas, {
+    concepto: CONCEPTOS[0],
+    monto: '',
+    pagado: true
+  }]);
+  const delL = i => lineas.length > 1 && setLineas(lineas.filter((_, j) => j !== i));
+  const updL = (i, k, v) => setLineas(lineas.map((l, j) => j === i ? {
+    ...l,
+    [k]: v
+  } : l));
+  const save = () => {
+    if (uids.length === 0 || !folio || lineas.some(l => !l.monto)) {
+      alert('Selecciona al menos un local y completa todos los campos');
+      return;
+    }
+    const registros = [];
+    uids.forEach(uid => {
+      lineas.forEach(l => registros.push({
+        unidadId: uid,
+        fecha,
+        folio,
+        concepto: l.concepto,
+        monto: Number(l.monto),
+        estatus: parcial ? l.pagado ? 'pagado' : 'pendiente' : 'pagado',
+        cancelado: false,
+        createdAt: new Date().toISOString()
+      }));
+    });
+    onSave(registros);
+  };
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Registrar Pago / Adeudo",
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Local(es) / Unidad(es) *"
+  }, /*#__PURE__*/React.createElement(MultiLocalSelect, {
+    selected: uids,
+    onChange: setUids,
+    unidades: unidades
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Fecha *"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: fecha,
+    onChange: e => setFecha(e.target.value),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  }))), uids.length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 p-2 rounded-lg text-xs",
+    style: {
+      background: '#EFF6FF',
+      border: '1px solid #BFDBFE',
+      color: '#1D4ED8'
+    }
+  }, /*#__PURE__*/React.createElement(I.Alert, {
+    sz: 14
+  }), "Se crear\xE1n ", uids.length, " registros (uno por local) con el mismo folio y conceptos."), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Folio Factura / Edo. Cuenta *"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: folio,
+    onChange: e => setFolio(e.target.value),
+    placeholder: "Ej. F-001",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-3 p-3 rounded-lg",
+    style: {
+      backgroundColor: '#FFF7ED',
+      border: '1px solid #FED7AA'
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => setParcial(!parcial),
+    className: `relative w-11 h-6 rounded-full transition-colors ${parcial ? 'bg-orange-500' : 'bg-gray-300'}`
+  }, /*#__PURE__*/React.createElement("span", {
+    className: `absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${parcial ? 'translate-x-6' : 'translate-x-1'}`
+  })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-semibold text-orange-700"
+  }, "Pago Parcial"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-orange-600"
+  }, "Activa si solo se pagaron algunos conceptos"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs font-semibold text-gray-600 uppercase tracking-wide"
+  }, "Conceptos *"), /*#__PURE__*/React.createElement("button", {
+    onClick: addL,
+    className: "flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-lg hover:bg-gray-100 transition",
+    style: {
+      color: C.navy
+    }
+  }, /*#__PURE__*/React.createElement(I.Plus, {
+    sz: 13
+  }), "Agregar")), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, lineas.map((l, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "flex items-center gap-2"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: l.concepto,
+    onChange: e => updL(i, 'concepto', e.target.value),
+    className: "flex-1 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  }, CONCEPTOS.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c,
+    value: c
+  }, c))), /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: l.monto,
+    onChange: e => updL(i, 'monto', e.target.value),
+    placeholder: "Monto",
+    className: "w-28 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  }), parcial && /*#__PURE__*/React.createElement("button", {
+    onClick: () => updL(i, 'pagado', !l.pagado),
+    className: `flex items-center gap-1 px-2 py-2 rounded-lg text-xs font-semibold border transition whitespace-nowrap ${l.pagado ? 'bg-green-50 border-green-300 text-green-700' : 'bg-red-50 border-red-300 text-red-700'}`
+  }, l.pagado ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Check, {
+    sz: 12
+  }), "Pagado") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.X, {
+    sz: 12
+  }), "Pendiente")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => delL(i),
+    disabled: lineas.length === 1,
+    className: "p-2 rounded-lg hover:bg-red-50 transition"
+  }, /*#__PURE__*/React.createElement(I.Minus, {
+    sz: 14,
+    st: {
+      color: lineas.length === 1 ? '#D1D5DB' : C.err
+    }
+  }))))), /*#__PURE__*/React.createElement("div", {
+    className: "flex justify-end mt-2"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-sm font-bold",
+    style: {
+      color: C.navy
+    }
+  }, "Total: ", fmt(total), uids.length > 1 ? ' × ' + uids.length + ' locales = ' + fmt(total * uids.length) : ''))), /*#__PURE__*/React.createElement("button", {
+    onClick: save,
+    disabled: syncing,
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm transition hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 16
+  }), "Guardando...") : uids.length > 1 ? 'Registrar en ' + uids.length + ' locales' : 'Registrar en Firebase')));
+}
+
+/* ─── MODAL ESTADO DE CUENTA MULTI-LOCAL ─────────── */
+function ModalEdo({
+  unidades,
+  onClose,
+  onGen
+}) {
+  const now = new Date();
+  const [uids, setUids] = useState([]);
+  const [mesD, setMesD] = useState(now.getMonth() + 1);
+  const [anoD, setAnoD] = useState(now.getFullYear());
+  const [mesH, setMesH] = useState(now.getMonth() + 1);
+  const [anoH, setAnoH] = useState(now.getFullYear());
+  const [tipo, setTipo] = useState('ambos');
+  const anos = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Generar Estado de Cuenta",
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Local(es) / Unidad(es) *"
+  }, /*#__PURE__*/React.createElement(MultiLocalSelect, {
+    selected: uids,
+    onChange: setUids,
+    unidades: unidades
+  })), uids.length > 1 && /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center gap-2 p-2 rounded-lg text-xs",
+    style: {
+      background: '#EFF6FF',
+      border: '1px solid #BFDBFE',
+      color: '#1D4ED8'
+    }
+  }, /*#__PURE__*/React.createElement(I.Alert, {
+    sz: 14
+  }), "El PDF incluir\xE1 una secci\xF3n por cada local seleccionado."), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Desde"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: mesD,
+    onChange: e => setMesD(Number(e.target.value)),
+    className: "flex-1 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, MESES_L.map((m, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i + 1
+  }, m.slice(0, 3)))), /*#__PURE__*/React.createElement("select", {
+    value: anoD,
+    onChange: e => setAnoD(Number(e.target.value)),
+    className: "w-20 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, anos.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a))))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Hasta"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-1"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: mesH,
+    onChange: e => setMesH(Number(e.target.value)),
+    className: "flex-1 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, MESES_L.map((m, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i + 1
+  }, m.slice(0, 3)))), /*#__PURE__*/React.createElement("select", {
+    value: anoH,
+    onChange: e => setAnoH(Number(e.target.value)),
+    className: "w-20 px-2 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, anos.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a)))))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Incluir saldos"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, [['ambos', 'Ambos'], ['pagado', 'Pagados'], ['pendiente', 'Pendientes']].map(([v, l]) => /*#__PURE__*/React.createElement("button", {
+    key: v,
+    onClick: () => setTipo(v),
+    className: `flex-1 py-2 rounded-lg text-xs font-semibold border transition ${tipo === v ? 'text-white border-transparent' : 'bg-white text-gray-600 border-gray-300'}`,
+    style: {
+      backgroundColor: tipo === v ? C.navy : undefined
+    }
+  }, l)))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => uids.length > 0 && onGen({
+      uids,
+      mesD,
+      anoD,
+      mesH,
+      anoH,
+      tipo
+    }),
+    disabled: uids.length === 0,
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm transition hover:opacity-90 disabled:opacity-40",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, "Generar PDF ", uids.length > 0 ? '(' + uids.length + ' local' + (uids.length > 1 ? 'es' : '') + ')' : '(selecciona locales)')));
+}
+
+/* ─── MODAL EXPORTAR PDF MES ─────────────────────── */
+function ModalExportPDF({
+  onClose,
+  onExport
+}) {
+  const [filtro, setFiltro] = useState('todos');
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Exportar PDF \u2014 Mes Actual",
+    onClose: onClose
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-gray-600"
+  }, "Elige qu\xE9 registros incluir en el PDF:"), /*#__PURE__*/React.createElement("div", {
+    className: "space-y-2"
+  }, [['todos', 'Todos los registros'], ['pagado', 'Solo pagos recibidos (Pagados)'], ['pendiente', 'Solo saldos pendientes']].map(([v, l]) => /*#__PURE__*/React.createElement("label", {
+    key: v,
+    onClick: () => setFiltro(v),
+    className: `flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition ${filtro === v ? 'border-blue-800 bg-blue-50' : 'border-gray-200 hover:border-gray-300'}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: `w-4 h-4 rounded-full border-2 flex items-center justify-center ${filtro === v ? 'border-blue-800' : 'border-gray-300'}`
+  }, filtro === v && /*#__PURE__*/React.createElement("div", {
+    className: "w-2 h-2 rounded-full bg-blue-800"
+  })), /*#__PURE__*/React.createElement("span", {
+    className: `text-sm ${filtro === v ? 'font-semibold text-blue-900' : 'text-gray-700'}`
+  }, l)))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onExport(filtro),
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition flex items-center justify-center gap-2",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, /*#__PURE__*/React.createElement(I.DL, {
+    sz: 15
+  }), "Descargar PDF")));
+}
+
+/* ─── MODAL IMPORTAR EXCEL ───────────────────────── */
+function ModalImport({
+  onClose,
+  onImport,
+  syncing,
+  tipo = 'pagos'
+}) {
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState('');
+  const colsPagos = ['Locales', 'Concepto', 'Monto', 'Fecha', 'Folio', 'Estatus'];
+  const colsGastos = ['Fecha', 'Concepto', 'Monto', 'Descripcion', 'Tipo'];
+  const cols = tipo === 'pagos' ? colsPagos : colsGastos;
+  const descargar = async () => {
+    await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    if (tipo === 'gastos') {
+      const datos = [{
+        Fecha: '2026-05-01',
+        Concepto: 'Limpieza',
+        Monto: 5000,
+        Descripcion: 'Servicio semanal',
+        Tipo: 'operativo'
+      }, {
+        Fecha: '2026-05-15',
+        Concepto: 'Mejoras lobby',
+        Monto: 25000,
+        Descripcion: 'Renovación',
+        Tipo: 'extraordinario'
+      }];
+      const ws = window.XLSX.utils.json_to_sheet(datos);
+      const wb = window.XLSX.utils.book_new();
+      window.XLSX.utils.book_append_sheet(wb, ws, 'Gastos');
+      window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_gastos.xlsx');
+      return;
+    }
+    // Plantilla HORIZONTAL para pagos: una fila por local, un concepto por columna
+    const CONCS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+    const localesList = ['PB2', 'PB3', 'Piso 8', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '301', '302', '303', '304', '305', '306', '307', '308', '309', '310', '311', '312', '401', '402', '403', '404', '405', '406', '407', '408', '409', '410', '411', '412', '501', '502', '503', '504', '505', '506', '507', '508', '509', '510', '511', '512', '601', '602', '603', '604', '605', '606', '607', '608', '609', '610', '611', '612', '701', '702', '703', '704', '705', '706', '707', '708', '709', '710', '711', '712'];
+    const hoy = new Date().toISOString().split('T')[0];
+    const datos = localesList.map((loc, i) => {
+      const row = {
+        Local: loc,
+        Folio: 'F-' + (i + 1).toString().padStart(3, '0'),
+        Fecha: hoy,
+        Estatus: 'pagado'
+      };
+      CONCS.forEach(c => {
+        row[c] = '';
+      });
+      return row;
+    });
+    const ws = window.XLSX.utils.json_to_sheet(datos);
+    // Estilo de encabezados
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, 'Pagos');
+    window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_pagos_horizontal.xlsx');
+  };
+  const leer = async e => {
+    setErr('');
+    setRows(null);
+    const file = e.target.files[0];
+    if (!file) return;
+    await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    const r = new FileReader();
+    r.onload = ev => {
+      try {
+        const wb = window.XLSX.read(ev.target.result, {
+          type: 'array'
+        });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = window.XLSX.utils.sheet_to_json(ws);
+        if (!data.length) {
+          setErr('Archivo vacío');
+          return;
+        }
+        const esHoriz = Object.keys(data[0]).includes('Local');
+        const reqCols = tipo === 'pagos' ? esHoriz ? ['Local', 'Fecha'] : ['Locales', 'Concepto', 'Fecha'] : ['Fecha', 'Concepto', 'Monto'];
+        const miss = reqCols.filter(c => !Object.keys(data[0]).includes(c));
+        if (miss.length) {
+          setErr(`Columnas faltantes: ${miss.join(', ')}`);
+          return;
+        }
+        setRows(data);
+      } catch (e2) {
+        setErr('No se pudo leer el archivo');
+      }
+    };
+    r.readAsArrayBuffer(file);
+  };
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: 'Importar ' + (tipo === 'pagos' ? 'Pagos' : 'Gastos') + ' desde Excel',
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg text-xs",
+    style: {
+      background: '#F0FDF4',
+      border: '1px solid #BBF7D0',
+      color: '#166534'
+    }
+  }, /*#__PURE__*/React.createElement("strong", null, "Columna \"Locales\":"), " acepta un ID o varios separados por coma. Ej: ", /*#__PURE__*/React.createElement("code", {
+    className: "bg-green-100 px-1 rounded"
+  }, "101"), " o ", /*#__PURE__*/React.createElement("code", {
+    className: "bg-green-100 px-1 rounded"
+  }, "101,102,103"), tipo === 'gastos' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("br", null), /*#__PURE__*/React.createElement("strong", null, "Columna \"Tipo\":"), " ", /*#__PURE__*/React.createElement("code", {
+    className: "bg-green-100 px-1 rounded"
+  }, "operativo"), " o ", /*#__PURE__*/React.createElement("code", {
+    className: "bg-green-100 px-1 rounded"
+  }, "extraordinario"))), /*#__PURE__*/React.createElement("button", {
+    onClick: descargar,
+    className: "flex items-center gap-2 text-sm font-medium px-3 py-2 rounded-lg border border-gray-300 hover:bg-gray-50 transition"
+  }, /*#__PURE__*/React.createElement(I.DL, {
+    sz: 15
+  }), "Descargar plantilla actualizada"), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Seleccionar archivo .xlsx"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".xlsx,.xls",
+    onChange: leer,
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+  })), err && /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-red-600 bg-red-50 px-3 py-2 rounded-lg"
+  }, err), rows && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-medium mb-2",
+    style: {
+      color: C.navy
+    }
+  }, rows.length, " registros listos para importar"), /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto border border-gray-200 rounded-lg max-h-44 scrollbar-thin"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: {
+      background: C.bg
+    }
+  }, /*#__PURE__*/React.createElement("tr", null, cols.map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "px-3 py-2 text-left font-semibold text-gray-600"
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, rows.slice(0, 5).map((row, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i,
+    className: "border-t border-gray-100"
+  }, cols.map(c => /*#__PURE__*/React.createElement("td", {
+    key: c,
+    className: "px-3 py-1.5"
+  }, String(row[c] || ''))))), rows.length > 5 && /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: cols.length,
+    className: "px-3 py-1.5 text-gray-400 text-center"
+  }, "...y ", rows.length - 5, " m\xE1s"))))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => onImport(rows),
+    disabled: syncing,
+    className: "w-full mt-3 py-2.5 rounded-lg text-white font-medium text-sm flex items-center justify-center gap-2 hover:opacity-90 disabled:opacity-50",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 16
+  }), "Importando...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Up, {
+    sz: 15
+  }), "Importar ", rows.length, " registros")))));
+}
+
+/* ─── MODAL REPORTE TIPO PRESENTACIÓN ───────────── */
+function ModalReportePresent({
+  onClose,
+  onGen
+}) {
+  const now = new Date();
+  const [mes, setMes] = useState(now.getMonth() + 1);
+  const [ano, setAno] = useState(now.getFullYear());
+  const [cxp, setCxp] = useState('');
+  const [cxpDesc, setCxpDesc] = useState('');
+  const [generando, setGenerando] = useState(false);
+  const anos = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
+  const handleGen = async () => {
+    setGenerando(true);
+    // Pequeño delay para que el navegador actualice el UI antes de bloquear con PDF
+    await new Promise(r => setTimeout(r, 100));
+    try {
+      await onGen({
+        mes,
+        ano,
+        cxp: Number(cxp) || 0,
+        cxpDesc
+      });
+    } finally {
+      setGenerando(false);
+    }
+  };
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Reporte Financiero \u2014 Comit\xE9",
+    onClose: onClose,
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg text-xs",
+    style: {
+      background: '#F5F3FF',
+      border: '1px solid #DDD6FE',
+      color: '#5B21B6'
+    }
+  }, "Genera el reporte mensual institucional con portada, \xEDndice, flujo de efectivo, cobranza y mapa de deudores. ", /*#__PURE__*/React.createElement("strong", null, "El proceso puede tardar 10-20 segundos"), " por el volumen de datos y gr\xE1ficas."), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Mes del reporte"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: mes,
+    onChange: e => setMes(Number(e.target.value)),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, MESES_L.map((m, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i + 1
+  }, m)))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "A\xF1o"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: ano,
+    onChange: e => setAno(Number(e.target.value)),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, anos.map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a))))), /*#__PURE__*/React.createElement("div", {
+    className: "border-t border-gray-200 pt-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3"
+  }, "Secci\xF3n 2.3 \u2014 Cuentas por Pagar (opcional)"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Proveedor / Descripci\xF3n"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: cxpDesc,
+    onChange: e => setCxpDesc(e.target.value),
+    placeholder: "Ej. Polarizado",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Monto actual (MXN)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: cxp,
+    onChange: e => setCxp(e.target.value),
+    placeholder: "215000",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+  })))), generando && /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-lg text-center",
+    style: {
+      background: '#EFF6FF',
+      border: '1px solid #BFDBFE'
+    }
+  }, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 24,
+    st: {
+      color: C.navy,
+      margin: '0 auto 8px'
+    }
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-medium",
+    style: {
+      color: C.navy
+    }
+  }, "Generando reporte..."), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-500 mt-1"
+  }, "Esto puede tomar hasta 20 segundos. No cierres esta ventana.")), /*#__PURE__*/React.createElement("button", {
+    onClick: handleGen,
+    disabled: generando,
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-60",
+    style: {
+      backgroundColor: C.navy
+    }
+  }, generando ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 15
+  }), "Generando PDF...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Report, {
+    sz: 15
+  }), "Generar Reporte \u2014 ", MESES_L[mes - 1], " ", ano))));
+}
+
+/* ─── COMPONENTE PRINCIPAL ───────────────────────── */
+function App() {
+  const unidades = useMemo(() => generarUnidades(), []);
+  const dbRef = useRef(null),
+    unsubRef = useRef(null),
+    unsubGRef = useRef(null);
+  const [pagos, setPagos] = useState([]);
+  const [gastos, setGastos] = useState([]);
+  const [adminHash, setAdminHash] = useState(null);
+  const [fbReady, setFbReady] = useState(false);
+  const [fbError, setFbError] = useState(null);
+  const [online, setOnline] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [esAdmin, setEsAdmin] = useState(false);
+  const [toast, setToast] = useState({
+    msg: '',
+    type: 'ok'
+  });
+  const [mAuth, setMAuth] = useState(false);
+  const [mReg, setMReg] = useState(false);
+  const [mEdo, setMEdo] = useState(false);
+  const [mImport, setMImport] = useState(false);
+  const [mImportG, setMImportG] = useState(false);
+  const [mConfig, setMConfig] = useState(false);
+  const [mReporte, setMReporte] = useState(false);
+  const [mExportPDF, setMExportPDF] = useState(false);
+  const [authErr, setAuthErr] = useState('');
+  const [editId, setEditId] = useState(null);
+  const [editMonto, setEditMonto] = useState('');
+  const [gastoForm, setGastoForm] = useState({
+    fecha: new Date().toISOString().split('T')[0],
+    concepto: '',
+    monto: '',
+    descripcion: '',
+    tipoGasto: 'operativo'
+  });
+  const [tab, setTab] = useState('actual');
+  const now = new Date();
+  const [fMes, setFMes] = useState(now.getMonth() + 1);
+  const [fAno, setFAno] = useState(now.getFullYear());
+  const [fLocal, setFLocal] = useState('todos');
+  const [fEst, setFEst] = useState('todos');
+  const [fConc, setFConc] = useState('todos');
+  const [fBusq, setFBusq] = useState('');
+  const [sortDir, setSortDir] = useState('desc');
+  const [pg, setPg] = useState(1);
+  const [gMes, setGMes] = useState('todos');
+  const [gAno, setGAno] = useState(now.getFullYear());
+  const [gPg, setGPg] = useState(1);
+  const PX = 10;
+  const showToast = (msg, type = 'ok') => {
+    setToast({
+      msg,
+      type
+    });
+    setTimeout(() => setToast({
+      msg: '',
+      type: 'ok'
+    }), 3000);
+  };
+
+  /* FIREBASE */
+  useEffect(() => {
+    let ok = true;
+    const init = async () => {
+      try {
+        if (!firebase.apps.length) firebase.initializeApp(window.firebaseConfig);
+        const db = firebase.firestore();
+        try {
+          await db.enablePersistence({
+            synchronizeTabs: true
+          });
+        } catch (e) {
+          console.warn(e.code);
+        }
+        dbRef.current = db;
+        const unsub = db.collection('pagos').orderBy('createdAt', 'desc').onSnapshot(snap => {
+          if (ok) {
+            setPagos(snap.docs.map(d => ({
+              id: d.id,
+              ...d.data()
+            })));
+            setSyncing(false);
+          }
+        }, err => {
+          setFbError(err.message);
+        });
+        const unsubG = db.collection('gastos').orderBy('createdAt', 'desc').onSnapshot(snap => {
+          if (ok) setGastos(snap.docs.map(d => ({
+            id: d.id,
+            ...d.data()
+          })));
+        });
+        unsubRef.current = unsub;
+        unsubGRef.current = unsubG;
+        const cfg = await db.collection('config').doc('admin').get();
+        if (cfg.exists) setAdminHash(cfg.data().passwordHash);else {
+          const h = await hashPwd('4321');
+          await db.collection('config').doc('admin').set({
+            passwordHash: h,
+            lastChanged: new Date().toISOString()
+          });
+          setAdminHash(h);
+        }
+        setFbReady(true);
+      } catch (e) {
+        setFbError('No se pudo conectar a Firebase. Revisa firebaseConfig.');
+      }
+    };
+    init();
+    const on = () => setOnline(true),
+      off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    setOnline(navigator.onLine);
+    return () => {
+      ok = false;
+      if (unsubRef.current) unsubRef.current();
+      if (unsubGRef.current) unsubGRef.current();
+      window.removeEventListener('online', on);
+      window.removeEventListener('offline', off);
+    };
+  }, []);
+  useEffect(() => setPg(1), [fMes, fAno, fLocal, fEst, fConc, fBusq, tab, sortDir]);
+  useEffect(() => setGPg(1), [gMes, gAno]);
+
+  /* ACCIONES */
+  const log = async (a, id, d = {}) => {
+    if (!dbRef.current) return;
+    try {
+      await dbRef.current.collection('auditoria').add({
+        accion: a,
+        registroId: id,
+        fecha: new Date().toISOString(),
+        detalles: d
+      });
+    } catch (e) {}
+  };
+  const guardarPagos = async rs => {
+    if (!dbRef.current) return;
+    setSyncing(true);
+    try {
+      const b = dbRef.current.batch();
+      rs.forEach(r => {
+        b.set(dbRef.current.collection('pagos').doc(), r);
+      });
+      await b.commit();
+      showToast(`${rs.length} registro(s) guardado(s)`, 'ok');
+      setMReg(false);
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const importarPagos = async rows => {
+    if (!dbRef.current || rows.length === 0) return;
+    setSyncing(true);
+    const CONCS_COLS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+    const esHorizontal = Object.keys(rows[0]).includes('Local') && !Object.keys(rows[0]).includes('Concepto');
+    try {
+      const b = dbRef.current.batch();
+      let total = 0;
+      if (esHorizontal) {
+        rows.forEach(r => {
+          const uid = String(r.Local || '').trim();
+          if (!uid) return;
+          const fecha = excelFecha(r.Fecha);
+          const folio = String(r.Folio || '');
+          const estatus = String(r.Estatus || 'pagado').toLowerCase();
+          CONCS_COLS.forEach(conc => {
+            const montoRaw = r[conc];
+            if (!montoRaw && montoRaw !== 0) return;
+            const monto = Number(String(montoRaw).replace(/[$, ]/g, ''));
+            if (isNaN(monto) || monto <= 0) return;
+            b.set(dbRef.current.collection('pagos').doc(), {
+              unidadId: uid,
+              concepto: conc,
+              monto,
+              fecha,
+              folio,
+              estatus,
+              cancelado: false,
+              createdAt: new Date().toISOString()
+            });
+            total++;
+          });
+        });
+      } else {
+        rows.forEach(r => {
+          const montoVal = Number(String(r.Monto || '').replace(/[$, ]/g, ''));
+          if (!r.Monto || isNaN(montoVal) || montoVal <= 0) return;
+          const locales = String(r.Locales || '').split(',').map(x => x.trim()).filter(Boolean);
+          locales.forEach(uid => {
+            b.set(dbRef.current.collection('pagos').doc(), {
+              unidadId: uid,
+              concepto: r.Concepto,
+              monto: montoVal,
+              fecha: excelFecha(r.Fecha),
+              folio: String(r.Folio || ''),
+              estatus: String(r.Estatus || 'pagado').toLowerCase(),
+              cancelado: false,
+              createdAt: new Date().toISOString()
+            });
+            total++;
+          });
+        });
+      }
+      await b.commit();
+      showToast(total + ' registros importados', 'ok');
+      setMImport(false);
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const importarGastos = async rows => {
+    if (!dbRef.current) return;
+    setSyncing(true);
+    try {
+      const b = dbRef.current.batch();
+      rows.forEach(r => {
+        b.set(dbRef.current.collection('gastos').doc(), {
+          fecha: excelFecha(r.Fecha),
+          concepto: String(r.Concepto),
+          monto: Number(r.Monto),
+          descripcion: String(r.Descripcion || ''),
+          tipoGasto: String(r.Tipo || 'operativo').toLowerCase(),
+          createdAt: new Date().toISOString()
+        });
+      });
+      await b.commit();
+      showToast('Gastos importados', 'ok');
+      setMImportG(false);
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const cancelar = async id => {
+    if (!esAdmin || !confirm('¿Cancelar?')) return;
+    setSyncing(true);
+    try {
+      await dbRef.current.collection('pagos').doc(id).update({
+        cancelado: true,
+        canceledAt: new Date().toISOString()
+      });
+      await log('CANCELADO', id);
+      showToast('Cancelado', 'ok');
+    } catch (e) {
+      showToast(e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const restaurar = async id => {
+    if (!esAdmin) return;
+    setSyncing(true);
+    try {
+      await dbRef.current.collection('pagos').doc(id).update({
+        cancelado: false,
+        canceledAt: null
+      });
+      showToast('Restaurado', 'ok');
+    } catch (e) {
+      showToast(e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const toggleEst = async id => {
+    const p = pagos.find(x => x.id === id);
+    if (!p) return;
+    setSyncing(true);
+    try {
+      const n = p.estatus === 'pagado' ? 'pendiente' : 'pagado';
+      await dbRef.current.collection('pagos').doc(id).update({
+        estatus: n,
+        updatedAt: new Date().toISOString()
+      });
+      showToast(`Marcado: ${n.toUpperCase()}`, 'ok');
+    } catch (e) {
+      showToast(e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const guardarMonto = async id => {
+    if (!esAdmin || !editMonto) return;
+    setSyncing(true);
+    try {
+      await dbRef.current.collection('pagos').doc(id).update({
+        monto: Number(editMonto),
+        updatedAt: new Date().toISOString()
+      });
+      setEditId(null);
+      showToast('Monto actualizado', 'ok');
+    } catch (e) {
+      showToast(e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  const guardarGasto = async () => {
+    if (!gastoForm.concepto || !gastoForm.monto) {
+      alert('Complete los campos');
+      return;
+    }
+    setSyncing(true);
+    try {
+      await dbRef.current.collection('gastos').add({
+        ...gastoForm,
+        monto: Number(gastoForm.monto),
+        createdAt: new Date().toISOString()
+      });
+      showToast('Gasto registrado', 'ok');
+      setGastoForm({
+        fecha: new Date().toISOString().split('T')[0],
+        concepto: '',
+        monto: '',
+        descripcion: '',
+        tipoGasto: 'operativo'
+      });
+    } catch (e) {
+      showToast(e.message, 'err');
+    } finally {
+      setSyncing(false);
+    }
+  };
+  const eliminarGasto = async id => {
+    if (!esAdmin || !confirm('¿Eliminar?')) return;
+    try {
+      await dbRef.current.collection('gastos').doc(id).delete();
+      showToast('Eliminado', 'ok');
+    } catch (e) {
+      showToast(e.message, 'err');
+    }
+  };
+  const autenticar = async pwd => {
+    setAuthErr('');
+    if (!adminHash) {
+      setAuthErr('Config no disponible');
+      return;
+    }
+    const h = await hashPwd(pwd);
+    if (h === adminHash) {
+      setEsAdmin(true);
+      setMAuth(false);
+      showToast('Admin activado', 'ok');
+    } else setAuthErr('Contraseña incorrecta');
+  };
+  const cambiarPwd = async nueva => {
+    if (!nueva || nueva.length < 4) return alert('Mínimo 4 chars');
+    const h = await hashPwd(nueva);
+    await dbRef.current.collection('config').doc('admin').set({
+      passwordHash: h,
+      lastChanged: new Date().toISOString()
+    });
+    setAdminHash(h);
+    showToast('Contraseña actualizada', 'ok');
+    setMConfig(false);
+  };
+
+  /* PDF UTILS */
+  const ensurePDF = async () => {
+    if (!window.jspdf) await loadJS('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+    if (!window.jspdf?.jsPDF?.API?.autoTable) await loadJS('https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js');
+  };
+  const hdrSimple = doc => {
+    doc.setFillColor(11, 37, 69);
+    doc.rect(0, 0, 210, 32, 'F');
+    try {
+      if (window.LOGO_EVA && window.LOGO_EVA.length > 100) doc.addImage(window.LOGO_EVA, 'JPEG', 8, 4, 28, 24);
+    } catch (e) {
+      console.warn('Logo:', e);
+    }
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.text('EDIFICIO VALLE ALTO', 42, 14);
+    doc.setFontSize(9);
+    doc.text('Régimen de Propiedad en Condominio', 42, 21);
+    doc.text(`Generado: ${new Date().toLocaleDateString('es-MX', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric'
+    })}`, 42, 27);
+    doc.setTextColor(40, 40, 40);
+  };
+
+  /* EXPORTACIONES SIMPLES */
+  const exportarExcel = async () => {
+    await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    const datos = pagosFiltrados.map(p => ({
+      Local: p.unidadId,
+      Concepto: p.concepto,
+      Monto: p.monto,
+      Fecha: p.fecha,
+      Folio: p.folio,
+      Estatus: p.estatus.toUpperCase()
+    }));
+    const ws = window.XLSX.utils.json_to_sheet(datos);
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, 'Reporte');
+    window.XLSX.writeFile(wb, `ValleAlto_${fAno}_${fMes}.xlsx`);
+    showToast('Excel exportado', 'ok');
+  };
+  const exportarPDF = async (filtroEstatus = 'todos') => {
+    await ensurePDF();
+    const {
+      jsPDF
+    } = window.jspdf;
+    const doc = new jsPDF();
+    hdrSimple(doc);
+    const datos = pagosFiltrados.filter(p => filtroEstatus === 'todos' || p.estatus === filtroEstatus);
+    doc.setFontSize(9);
+    doc.setTextColor(40, 40, 40);
+    doc.text('Periodo: ' + MESES_L[now.getMonth()] + ' ' + now.getFullYear() + ' | Filtro: ' + (filtroEstatus === 'todos' ? 'Todos' : filtroEstatus.toUpperCase()), 14, 42);
+    doc.autoTable({
+      startY: 47,
+      head: [['Local', 'Concepto', 'Monto', 'Fecha', 'Folio', 'Estatus']],
+      body: datos.map(p => [p.unidadId, p.concepto, fmt(p.monto), p.fecha, p.folio, p.estatus.toUpperCase()]),
+      headStyles: {
+        fillColor: [11, 37, 69],
+        textColor: 255,
+        fontSize: 9
+      },
+      bodyStyles: {
+        fontSize: 8
+      },
+      alternateRowStyles: {
+        fillColor: [244, 245, 247]
+      }
+    });
+    const fy = doc.lastAutoTable.finalY + 8;
+    const rec = datos.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const pen = datos.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+    doc.setFontSize(10);
+    doc.text('Recaudado: ' + fmt(rec), 14, fy);
+    doc.text('Pendiente: ' + fmt(pen), 14, fy + 6);
+    doc.save('ValleAlto_Mes_' + now.getFullYear() + '_' + (now.getMonth() + 1) + '_' + filtroEstatus + '.pdf');
+    showToast('PDF exportado', 'ok');
+    setMExportPDF(false);
+  };
+
+  /* ESTADO DE CUENTA MULTI-LOCAL */
+  const genEdoCuenta = async ({
+    uids,
+    mesD,
+    anoD,
+    mesH,
+    anoH,
+    tipo
+  }) => {
+    await ensurePDF();
+    const {
+      jsPDF
+    } = window.jspdf;
+    const doc = new jsPDF();
+    hdrSimple(doc);
+    doc.setFontSize(11);
+    doc.setTextColor(40, 40, 40);
+    doc.text('ESTADO DE CUENTA', 14, 40);
+    doc.setFontSize(9);
+    doc.text('Periodo: ' + MESES_L[mesD - 1] + ' ' + anoD + ' - ' + MESES_L[mesH - 1] + ' ' + anoH + ' | Saldos: ' + (tipo === 'ambos' ? 'Todos' : tipo), 14, 47);
+    let startY = 53;
+    uids.forEach((uid, idx) => {
+      if (idx > 0) {
+        doc.addPage();
+        hdrSimple(doc);
+        startY = 40;
+      }
+      const movs = pagos.filter(p => {
+        if (p.unidadId !== uid || p.cancelado) return false;
+        const f = new Date(p.fecha + 'T00:00:00');
+        if (f < new Date(anoD, mesD - 1, 1) || f > new Date(anoH, mesH, 0)) return false;
+        if (tipo !== 'ambos' && p.estatus !== tipo) return false;
+        return true;
+      });
+      const tp = movs.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+      const td = movs.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+      doc.setFontSize(11);
+      doc.setTextColor(11, 37, 69);
+      doc.text('Local / Unidad: ' + uid, 14, startY);
+      doc.setFontSize(8);
+      doc.setTextColor(120, 120, 120);
+      doc.text('Folio: EC-' + uid + '-' + Date.now().toString().slice(-4), 14, startY + 6);
+      doc.autoTable({
+        startY: startY + 10,
+        head: [['Fecha', 'Concepto', 'Folio', 'Monto', 'Estatus']],
+        body: movs.length > 0 ? movs.map(p => [p.fecha, p.concepto, p.folio, fmt(p.monto), p.estatus.toUpperCase()]) : [['—', 'Sin movimientos en el período', '—', '—', '—']],
+        headStyles: {
+          fillColor: [11, 37, 69],
+          textColor: 255,
+          fontSize: 8
+        },
+        bodyStyles: {
+          fontSize: 8
+        },
+        alternateRowStyles: {
+          fillColor: [244, 245, 247]
+        },
+        columnStyles: {
+          3: {
+            halign: 'right'
+          },
+          4: {
+            halign: 'center'
+          }
+        }
+      });
+      const fy = doc.lastAutoTable.finalY + 6;
+      doc.setFillColor(244, 245, 247);
+      doc.rect(110, fy, 86, tipo === 'ambos' ? 28 : 18, 'F');
+      doc.setFontSize(9);
+      doc.setTextColor(40, 40, 40);
+      if (tipo !== 'pendiente') {
+        doc.text('TOTAL PAGADO:', 114, fy + 7);
+        doc.setTextColor(27, 127, 90);
+        doc.text(fmt(tp), 192, fy + 7, {
+          align: 'right'
+        });
+      }
+      if (tipo !== 'pagado') {
+        const y = tipo === 'ambos' ? fy + 14 : fy + 7;
+        doc.setTextColor(40, 40, 40);
+        doc.text('TOTAL PENDIENTE:', 114, y);
+        doc.setTextColor(166, 39, 58);
+        doc.text(fmt(td), 192, y, {
+          align: 'right'
+        });
+      }
+      if (tipo === 'ambos') {
+        doc.setTextColor(11, 37, 69);
+        doc.setFontSize(10);
+        doc.text('SALDO ACTUAL:', 114, fy + 22);
+        doc.text(fmt(td), 192, fy + 22, {
+          align: 'right'
+        });
+      }
+      startY = fy + 38;
+    });
+    doc.setFontSize(8);
+    doc.setTextColor(120, 120, 120);
+    doc.text('Documento oficial — Administración Edificio Valle Alto.', 14, 285);
+    doc.save('EdoCuenta_' + uids.join('-') + '_' + mesD + '' + anoD + '.pdf');
+    setMEdo(false);
+    showToast('Estado de cuenta: ' + uids.length + ' local' + (uids.length > 1 ? 'es' : ''), 'ok');
+  };
+
+  /* ─── REPORTE FINANCIERO TIPO PRESENTACIÓN ────── */
   const genReportePresent = async ({
     mes,
     ano,
