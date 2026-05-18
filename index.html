@@ -993,9 +993,9 @@ function ModalReportePresent({
     }
   }, generando ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
     sz: 15
-  }), "Generando PDF...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Report, {
+  }), "Generando...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Report, {
     sz: 15
-  }), "Generar Reporte \u2014 ", MESES_L[mes - 1], " ", ano))));
+  }), "Descargar Prompt \u2014 ", MESES_L[mes - 1], " ", ano))));
 }
 
 /*     COMPONENTE PRINCIPAL                           */
@@ -1598,20 +1598,7 @@ function App() {
     cxp,
     cxpDesc
   }) => {
-    await ensurePDF();
-    console.log('jsPDF cargado, iniciando reporte...');
-    const {
-      jsPDF
-    } = window.jspdf;
-    const doc = new jsPDF('p', 'mm', 'a4');
-    console.log('Doc creado OK');
-    const W = 210,
-      H = 297;
     const mesNom = MESES_L[mes - 1];
-    const numReporte = String(mes).padStart(2, '0') + '/' + String(ano);
-    const periodoStr = 'Del 1 al ' + new Date(ano, mes, 0).getDate() + ' de ' + mesNom.toLowerCase() + ' ' + String(ano);
-
-    // Filtrar datos del mes
     const pagosMes = pagos.filter(p => {
       if (p.cancelado) return false;
       const f = new Date(p.fecha + 'T00:00:00');
@@ -1621,651 +1608,152 @@ function App() {
       const f = new Date(g.fecha + 'T00:00:00');
       return f.getMonth() + 1 === mes && f.getFullYear() === ano;
     });
-    const pagosAno = pagos.filter(p => {
-      if (p.cancelado) return false;
-      return new Date(p.fecha + 'T00:00:00').getFullYear() === ano;
-    });
-    const gastosAno = gastos.filter(g => new Date(g.fecha + 'T00:00:00').getFullYear() === ano);
-
-    // Ingresos agrupados por concepto
     const ingConc = {};
     pagosMes.filter(p => p.estatus === 'pagado').forEach(p => {
       ingConc[p.concepto] = (ingConc[p.concepto] || 0) + Number(p.monto);
     });
     const totalIngMes = Object.values(ingConc).reduce((s, v) => s + v, 0);
-
-    // Gastos del mes
-    const gastosOpMes = gastosMes.filter(g => g.tipoGasto === 'operativo' || !g.tipoGasto);
-    const gastosExMes = gastosMes.filter(g => g.tipoGasto === 'extraordinario');
-    const totalGastosOp = gastosOpMes.reduce((s, g) => s + Number(g.monto), 0);
-    const totalGastosEx = gastosExMes.reduce((s, g) => s + Number(g.monto), 0);
+    const gastosOp = gastosMes.filter(g => g.tipoGasto === 'operativo' || !g.tipoGasto);
+    const gastosEx = gastosMes.filter(g => g.tipoGasto === 'extraordinario');
+    const totalGastosOp = gastosOp.reduce((s, g) => s + Number(g.monto), 0);
+    const totalGastosEx = gastosEx.reduce((s, g) => s + Number(g.monto), 0);
     const totalGastosMes = totalGastosOp + totalGastosEx;
     const saldoCaja = totalIngMes - totalGastosMes;
-
-    // Morosos
     const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => p.unidadId));
     const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado').map(p => p.unidadId));
     const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
-    const localesAlCorriente = unidades.length - soloMorosos.length;
-
-    // Serie mensual para graficas (datos reales por mes del ano)
+    const montoPagado = pagosMes.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+    const pctCumpl = montoPagado + montoPendiente > 0 ? Math.round(montoPagado / (montoPagado + montoPendiente) * 100) : 0;
+    const mapMor = {};
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente').forEach(p => {
+      mapMor[p.unidadId] = (mapMor[p.unidadId] || 0) + Number(p.monto);
+    });
+    const topMor = Object.entries(mapMor).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const serieMes = MESES_S.map((m, i) => {
-      const ing = pagosAno.filter(p => p.estatus === 'pagado' && new Date(p.fecha + 'T00:00:00').getMonth() === i).reduce((s, p) => s + Number(p.monto), 0);
-      const gasOp = gastosAno.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i).reduce((s, g) => s + Number(g.monto), 0);
-      const gasEx = gastosAno.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i).reduce((s, g) => s + Number(g.monto), 0);
-      const gasTot = gasOp + gasEx;
+      const ing = pagos.filter(p => !p.cancelado && p.estatus === 'pagado' && new Date(p.fecha + 'T00:00:00').getMonth() === i && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + Number(p.monto), 0);
+      const gOp = gastos.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
+      const gEx = gastos.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       return {
         m,
         ing,
-        gasOp,
-        gasEx,
-        gasTot,
-        saldo: ing - gasTot
+        gOp,
+        gEx,
+        gTot: gOp + gEx,
+        saldo: ing - (gOp + gEx)
       };
     });
-    const maxIng = Math.max(...serieMes.map(x => x.ing), 1);
-    const maxGasOp = Math.max(...serieMes.map(x => x.gasOp), 1);
-    const maxGasTot = Math.max(...serieMes.map(x => x.gasTot), 1);
-    const maxSaldo = Math.max(...serieMes.map(x => x.saldo), 1);
-
-    // Helper: mini bar chart in PDF
-    const drawBarChart = (doc, x, y, w, h, data, maxVal, color, mesActual) => {
-      const bw = Math.floor(w / 12) - 1;
-      doc.setDrawColor(230, 230, 230);
-      data.forEach((val, i) => {
-        const bx = x + i * (bw + 1);
-        const bh = maxVal > 0 ? Math.round(val / maxVal * h) : 0;
-        const by = y + h - bh;
-        const isActual = i === mesActual - 1;
-        doc.setFillColor(...(isActual ? [11, 37, 69] : [180, 190, 200]));
-        doc.rect(bx, by, bw, bh, 'F');
-        if (bh > 0) {
-          doc.setFontSize(5);
-          doc.setTextColor(60, 60, 60);
-          const label = val >= 1000 ? '$' + Math.round(val / 1000) + 'K' : '';
-          if (label) doc.text(label, bx + bw / 2, by - 1, {
-            align: 'center'
-          });
-        }
-      });
-      // Eje X
-      doc.setFontSize(5);
-      doc.setTextColor(120, 120, 120);
-      MESES_S.forEach((m, i) => doc.text(m, x + i * (bw + 1) + bw / 2, y + h + 4, {
-        align: 'center'
-      }));
-    };
-    console.log('Iniciando portada...'); // --- PAGINA 1: PORTADA -------------------------
-    // Fondo superior azul marino
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, H / 2, 'F');
-    // Texto pequeno arriba
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('ADMINISTRACION  EDIFICIO  VALLE  ALTO  ' + ano, 14, 14);
-    // Seccion label
-    doc.setFontSize(8);
-    doc.setTextColor(180, 190, 210);
-    doc.setFont('helvetica', 'normal');
-    doc.text('REPORTE FINANCIERO Y DE OPERACIONES AL COMITE', 14, 35);
-    // Titulo grande
-    doc.setFontSize(28);
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Reporte del mes de', 14, 58);
-    doc.setFontSize(28);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bolditalic');
-    doc.text(sanitize(mesNom) + ' ' + ano, 14, 72);
-    // Linea decorativa
-    doc.setDrawColor(201, 169, 97);
-    doc.setLineWidth(0.8);
-    doc.line(14, 80, 50, 80);
-    // Metadatos en 2 columnas
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
-    doc.setTextColor(140, 155, 175);
-    doc.text('PERIODO', 14, 95);
-    doc.text('PRESENTADO A', W / 2, 95);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(220, 230, 245);
-    doc.text(sanitize(periodoStr), 14, 102);
-    doc.text('Comite Consultivo y de Vigilancia', W / 2, 102);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7);
-    doc.setTextColor(140, 155, 175);
-    doc.text('ELABORADO POR', 14, 114);
-    doc.text('DOCUMENTO', W / 2, 114);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(220, 230, 245);
-    doc.text('Administracion EVA ' + ano, 14, 121);
-    doc.text('Reporte mensual N. ' + numReporte, W / 2, 121);
-    // Foto del edificio en la mitad inferior
-    try {
-      if (window.EDIFICIO_IMG && window.EDIFICIO_IMG.length > 100) {
-        doc.addImage(window.EDIFICIO_IMG, 'JPEG', 0, H / 2, W, H / 2);
-      }
-    } catch (e) {
-      console.warn('Img edificio:', e);
-      doc.setFillColor(200, 210, 220);
-      doc.rect(0, H / 2, W, H / 2, 'F');
+    const fN = n => '$' + Number(n).toLocaleString('es-MX', {
+      minimumFractionDigits: 2
+    });
+    const nR = String(mes).padStart(2, '0') + '/' + ano;
+    const diasMes = new Date(ano, mes, 0).getDate();
+    const NL = '\n';
+    const SEP = '=======================================================' + NL;
+    const DIV = '-------------------------------------------------------' + NL;
+    var L = [];
+    L.push(SEP);
+    L.push('PROMPT PARA GENERACION DE REPORTE FINANCIERO EVA' + NL);
+    L.push('Edificio Valle Alto - Regimen de Propiedad en Condominio' + NL);
+    L.push(SEP + NL);
+    L.push('INSTRUCCION PARA CLAUDE:' + NL);
+    L.push('Genera el Reporte Financiero y de Operaciones al Comite del Edificio Valle Alto.' + NL);
+    L.push('Sigue el formato institucional del modelo PDF: portada azul marino (#0B2545) con foto del' + NL);
+    L.push('edificio, titulo en blanco, subtitulo en dorado (#C9A961). Indice en pagina 2. Cada capitulo' + NL);
+    L.push('en pagina nueva con fondo azul marino. Tablas con encabezado azul marino y texto blanco,' + NL);
+    L.push('filas alternas gris claro. Graficas de barras (azul para mes actual, gris para anteriores).' + NL);
+    L.push('Mapa de deudores en grid: verde=al corriente, rojo=con adeudo. Footer institucional en cada pagina.' + NL);
+    L.push('Estructura: Cap I (Flujo de Efectivo: ingresos, gastos op, gastos ext, total gastos, saldo caja)' + NL);
+    L.push('Cap II (Cobranza: general, mapa deudores, cuentas por pagar si aplica).' + NL + NL);
+    L.push(DIV);
+    L.push('DATOS DEL REPORTE' + NL);
+    L.push(DIV + NL);
+    L.push('ENCABEZADO:' + NL);
+    L.push('  Titulo: Reporte del mes de ' + mesNom + ' ' + ano + NL);
+    L.push('  Periodo: Del 1 al ' + diasMes + ' de ' + mesNom.toLowerCase() + ' ' + ano + NL);
+    L.push('  Presentado a: Comite Consultivo y de Vigilancia' + NL);
+    L.push('  Elaborado por: Administracion EVA ' + ano + NL);
+    L.push('  Documento: Reporte mensual N. ' + nR + NL + NL);
+    L.push('SECCION 1.1 - INGRESOS DEL MES:' + NL);
+    Object.entries(ingConc).forEach(([c, v]) => L.push('  ' + c + ': ' + fN(v) + NL));
+    L.push('  TOTAL INGRESOS: ' + fN(totalIngMes) + NL + NL);
+    L.push('SECCION 1.2 - TENDENCIA INGRESOS ' + ano + ':' + NL);
+    serieMes.forEach(s => {
+      if (s.ing > 0) L.push('  ' + s.m + ': ' + fN(s.ing) + NL);
+    });
+    L.push(NL);
+    L.push('SECCION 1.3 - GASTOS OPERATIVOS:' + NL);
+    if (gastosOp.length > 0) {
+      gastosOp.forEach(g => L.push('  ' + g.concepto + ': ' + fN(g.monto) + NL));
+    } else {
+      L.push('  Sin gastos operativos registrados.' + NL);
     }
-    console.log('Pag 2 indice...'); // --- PAGINA 2: INDICE -------------------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('INDICE DEL REPORTE', 14, 11);
-    doc.setFontSize(22);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Temario', 14, 35);
-    doc.setFontSize(9);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Resumen de los apartados que componen el presente reporte mensual.', 14, 44);
-    const indice = [['I. Flujo de Efectivo', '> Ingresos del mes', '> Gastos operativos', '> Gastos extraordinarios', '> Total de gastos', '> Saldo final en caja'], ['II. Cobranza', '> Cobranza general', '> Mapa de deudores', '> Cuentas por pagar', '', '']];
-    let iy = 58;
-    indice.forEach(col => {
-      let cy = iy;
-      doc.setFontSize(11);
-      doc.setTextColor(11, 37, 69);
-      doc.setFont('helvetica', 'bold');
-      doc.text(col[0], 14, cy);
-      cy += 8;
-      col.slice(1).forEach(item => {
-        if (item) {
-          doc.setFontSize(9);
-          doc.setTextColor(80, 90, 105);
-          doc.setFont('helvetica', 'normal');
-          doc.text(item, 20, cy);
-          cy += 7;
-        }
-      });
-      iy = cy + 10;
+    L.push('  TOTAL GASTOS OPERATIVOS: ' + fN(totalGastosOp) + NL + NL);
+    L.push('SECCION 1.4 - TENDENCIA GASTOS OPERATIVOS ' + ano + ':' + NL);
+    serieMes.forEach(s => {
+      if (s.gOp > 0) L.push('  ' + s.m + ': ' + fN(s.gOp) + NL);
     });
-    console.log('Pag 3 cap1...'); // --- PAGINA 3: CAPITULO I PORTADA -------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, H, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('C A P I T U L O  I', 14, 20);
-    doc.setFontSize(28);
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Flujo de Efectivo', 14, 50);
-    doc.setFontSize(11);
-    doc.setTextColor(180, 190, 210);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Analisis detallado de ingresos, egresos y saldo final de caja del mes.', 14, 62);
-    console.log('Pag 4 ingresos...'); // --- PAGINA 4: INGRESOS DEL MES ---------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 1.1', 14, 11);
-    doc.setFontSize(22);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Ingresos del mes', 14, 32);
-    doc.setFontSize(9);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Detalle de las entradas registradas en el periodo, segmentadas por concepto.', 14, 40);
-    doc.autoTable({
-      startY: 46,
-      head: [['CONCEPTO', 'MONTO (MXN)']],
-      body: [...Object.entries(ingConc).map(([c, v]) => [sanitize(c), sanitize(fmt(v))]), ['TOTAL DE INGRESOS DEL MES', sanitize(fmt(totalIngMes))]],
-      headStyles: {
-        fillColor: [11, 37, 69],
-        textColor: 255,
-        fontSize: 9,
-        fontStyle: 'bold'
-      },
-      bodyStyles: {
-        fontSize: 9
-      },
-      alternateRowStyles: {
-        fillColor: [244, 245, 247]
-      },
-      columnStyles: {
-        1: {
-          halign: 'right'
-        }
-      },
-      foot: [],
-      didParseCell: d => {
-        if (d.row.index === Object.keys(ingConc).length) {
-          d.cell.styles.fontStyle = 'bold';
-          d.cell.styles.fillColor = [11, 37, 69];
-          d.cell.styles.textColor = [255, 255, 255];
-        }
-      }
-    });
-    console.log('Pag 5 tendencia...'); // --- PAGINA 5: TENDENCIA INGRESOS -------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 1.2', 14, 11);
-    doc.setFontSize(22);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Total de ', 14, 32);
-    doc.setFont('helvetica', 'bolditalic');
-    doc.text('ingresos', 54, 32);
-    doc.setFontSize(9);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Tendencia mensual acumulada de ingresos del ejercicio.', 14, 40);
-    doc.setDrawColor(220, 225, 230);
-    doc.setLineWidth(0.3);
-    doc.rect(14, 48, W - 28, 70);
-    doc.setFontSize(6);
-    doc.setTextColor(100, 100, 100);
-    doc.setFont('helvetica', 'bold');
-    doc.text('TENDENCIA MENSUAL DE INGRESOS - ' + ano, 18, 54);
-    doc.setFontSize(10);
-    doc.setTextColor(30, 40, 50);
-    doc.text('Ingresos por mes (MXN)', 18, 61);
-    drawBarChart(doc, 18, 65, W - 36, 45, serieMes.map(x => x.ing), maxIng, [11, 37, 69], mes);
-    console.log('Pag 6 gastos...'); // --- PAGINA 6: GASTOS OPERATIVOS --------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 1.3', 14, 11);
-    doc.setFontSize(22);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Gastos operativos', 14, 32);
-    doc.setFontSize(9);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Erogaciones recurrentes necesarias para la operacion cotidiana del edificio.', 14, 40);
-    const bodyOp = gastosOpMes.length > 0 ? gastosOpMes.map(g => [sanitize(g.concepto), sanitize(fmt(g.monto))]) : [['Sin gastos operativos registrados', '-']];
-    bodyOp.push(['TOTAL DE GASTOS OPERATIVOS DEL MES', fmt(totalGastosOp)]);
-    doc.autoTable({
-      startY: 46,
-      head: [['CONCEPTO', 'MONTO (MXN)']],
-      body: bodyOp,
-      headStyles: {
-        fillColor: [11, 37, 69],
-        textColor: 255,
-        fontSize: 9
-      },
-      bodyStyles: {
-        fontSize: 9
-      },
-      alternateRowStyles: {
-        fillColor: [244, 245, 247]
-      },
-      columnStyles: {
-        1: {
-          halign: 'right'
-        }
-      },
-      didParseCell: d => {
-        if (d.row.index === bodyOp.length - 1) {
-          d.cell.styles.fontStyle = 'bold';
-          d.cell.styles.fillColor = [11, 37, 69];
-          d.cell.styles.textColor = [255, 255, 255];
-        }
-      }
-    });
-
-    // Tendencia gastos op
-    const fy1 = doc.lastAutoTable.finalY + 10;
-    doc.setFontSize(6);
-    doc.setTextColor(100, 100, 100);
-    doc.setFont('helvetica', 'bold');
-    doc.text('TENDENCIA MENSUAL DE GASTOS OPERATIVOS - ' + ano, 18, fy1 + 6);
-    doc.setFontSize(9);
-    doc.setTextColor(30, 40, 50);
-    doc.text('Gastos operativos por mes (MXN)', 18, fy1 + 13);
-    doc.setDrawColor(220, 225, 230);
-    doc.setLineWidth(0.3);
-    doc.rect(14, fy1, W - 28, 55);
-    drawBarChart(doc, 18, fy1 + 17, W - 36, 32, serieMes.map(x => x.gasOp), maxGasOp, [11, 37, 69], mes);
-
-    // Gastos extraordinarios
-    const fy2 = fy1 + 62;
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 1.5', 14, fy2 + 4);
-    doc.setFontSize(18);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Gastos ', 14, fy2 + 15);
-    doc.setFont('helvetica', 'bolditalic');
-    doc.text('extraordinarios', 47, fy2 + 15);
-    doc.setFontSize(8);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Erogaciones no recurrentes asociadas a mejoras o contingencias.', 14, fy2 + 22);
-    const bodyEx = gastosExMes.length > 0 ? gastosExMes.map(g => [sanitize(g.concepto), sanitize(fmt(g.monto))]) : [['Sin gastos extraordinarios en el mes', '-']];
-    bodyEx.push(['TOTAL DE GASTOS EXTRAORDINARIOS', fmt(totalGastosEx)]);
-    doc.autoTable({
-      startY: fy2 + 26,
-      head: [['CONCEPTO', 'MONTO (MXN)']],
-      body: bodyEx,
-      headStyles: {
-        fillColor: [11, 37, 69],
-        textColor: 255,
-        fontSize: 9
-      },
-      bodyStyles: {
-        fontSize: 8
-      },
-      alternateRowStyles: {
-        fillColor: [244, 245, 247]
-      },
-      columnStyles: {
-        1: {
-          halign: 'right'
-        }
-      },
-      didParseCell: d => {
-        if (d.row.index === bodyEx.length - 1) {
-          d.cell.styles.fontStyle = 'bold';
-          d.cell.styles.fillColor = [11, 37, 69];
-          d.cell.styles.textColor = [255, 255, 255];
-        }
-      }
-    });
-    console.log('Pag 7 totales...'); // --- PAGINA 7: TOTALES + SALDO -----------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 1.6', 14, 11);
-    doc.setFontSize(18);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Total de ', 14, 30);
-    doc.setFont('helvetica', 'bolditalic');
-    doc.text('gastos', 46, 30);
-    doc.setFontSize(8);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Tendencia consolidada (operativos + extraordinarios).', 14, 37);
-    doc.setDrawColor(220, 225, 230);
-    doc.setLineWidth(0.3);
-    doc.rect(14, 42, W - 28, 55);
-    doc.setFontSize(6);
-    doc.setTextColor(100, 100, 100);
-    doc.setFont('helvetica', 'bold');
-    doc.text('TENDENCIA MENSUAL DE GASTOS TOTALES - ' + ano, 18, 48);
-    doc.setFontSize(9);
-    doc.setTextColor(30, 40, 50);
-    doc.text('Gastos totales por mes (MXN)', 18, 55);
-    drawBarChart(doc, 18, 59, W - 36, 32, serieMes.map(x => x.gasTot), maxGasTot, [11, 37, 69], mes);
-    const sy = 103;
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 1.7', 14, sy);
-    doc.setFontSize(18);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Saldo final ', 14, sy + 11);
-    doc.setFont('helvetica', 'bolditalic');
-    doc.text('de caja', 55, sy + 11);
-    doc.setFontSize(8);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Evolucion mensual del saldo en caja (ingresos - gastos totales).', 14, sy + 18);
-    doc.setDrawColor(220, 225, 230);
-    doc.setLineWidth(0.3);
-    doc.rect(14, sy + 22, W - 28, 55);
-    doc.setFontSize(6);
-    doc.setTextColor(100, 100, 100);
-    doc.setFont('helvetica', 'bold');
-    doc.text('EVOLUCION DEL SALDO EN CAJA - ' + ano, 18, sy + 28);
-    doc.setFontSize(9);
-    doc.setTextColor(30, 40, 50);
-    doc.text('Saldo final de caja por mes (MXN)', 18, sy + 35);
-    drawBarChart(doc, 18, sy + 39, W - 36, 32, serieMes.map(x => Math.max(0, x.saldo)), maxSaldo, [11, 37, 69], mes);
-
-    // Resumen caja mes
-    const ry = sy + 83;
-    doc.setFillColor(11, 37, 69);
-    doc.rect(14, ry, W - 28, 28, 'F');
-    doc.setFontSize(9);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('RESUMEN DEL MES', 16, ry + 8);
-    doc.setFontSize(8);
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Ingresos: ' + fmt(totalIngMes), 16, ry + 15);
-    doc.text('Gastos Op.: ' + fmt(totalGastosOp), 75, ry + 15);
-    doc.text('Gastos Ext.: ' + fmt(totalGastosEx), 134, ry + 15);
-    doc.setTextColor(201, 169, 97);
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Saldo de Caja: ' + fmt(saldoCaja), 16, ry + 23);
-    console.log('Pag 8 cap2...'); // --- PAGINA 8: CAP II PORTADA ------------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, H, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('C A P I T U L O  I I', 14, 20);
-    doc.setFontSize(28);
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Cobranza', 14, 50);
-    doc.setFontSize(11);
-    doc.setTextColor(180, 190, 210);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Estatus de cobranza ordinaria, mapa de deudores y cuentas por pagar.', 14, 62);
-    console.log('Pag 9 cobranza...'); // --- PAGINA 9: COBRANZA GENERAL ---------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 2.1', 14, 11);
-    doc.setFontSize(20);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Cobranza general', 14, 30);
-    doc.setFontSize(8);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Estatus consolidado de cobranza ordinaria del mes.', 14, 38);
-    // Objetivo
-    const objCobranza = pagos.filter(p => !p.cancelado && new Date(p.fecha + 'T00:00:00').getMonth() + 1 === mes && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + Number(p.monto), 0);
-    const montoPagado = pagosMes.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
-    const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
-    const pctCumpl = objCobranza > 0 ? Math.round(montoPagado / objCobranza * 100) : 0;
-    // KPI boxes
-    const boxes = [{
-      l: 'OBJETIVO DE COBRANZA',
-      v: sanitize(fmt(objCobranza))
-    }, {
-      l: 'RECAUDADO',
-      v: sanitize(fmt(montoPagado))
-    }, {
-      l: 'PENDIENTE',
-      v: sanitize(fmt(montoPendiente))
-    }, {
-      l: '% CUMPLIMIENTO',
-      v: pctCumpl + '%'
-    }];
-    boxes.forEach((b, i) => {
-      const bx = 14 + i % 2 * (W / 2 - 10),
-        by = 44 + Math.floor(i / 2) * 22;
-      doc.setFillColor(i === 3 && pctCumpl >= 60 ? [27, 127, 90] : [11, 37, 69]);
-      doc.setFillColor(11, 37, 69);
-      doc.rect(bx, by, W / 2 - 16, 18, 'F');
-      doc.setFontSize(6);
-      doc.setTextColor(201, 169, 97);
-      doc.setFont('helvetica', 'bold');
-      doc.text(b.l, bx + 4, by + 6);
-      doc.setFontSize(11);
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.text(b.v, bx + 4, by + 14);
-    });
-    // Totales locales
-    const totalLocales = unidades.length;
-    doc.setFontSize(9);
-    doc.setTextColor(40, 40, 40);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Total locales: ' + totalLocales + ' | Al corriente: ' + localesAlCorriente + ' | Con adeudo: ' + soloMorosos.length, 14, 94);
-    console.log('Pag 10 mapa...'); // --- PAGINA 10: MAPA DE DEUDORES --------------
-    doc.addPage();
-    doc.setFillColor(11, 37, 69);
-    doc.rect(0, 0, W, 18, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(201, 169, 97);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SECCION 2.2', 14, 11);
-    doc.setFontSize(20);
-    doc.setTextColor(11, 37, 69);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Mapa de deudores', 14, 30);
-    doc.setFontSize(8);
-    doc.setTextColor(100, 110, 125);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Visualizacion del estatus de cobranza por local.', 14, 38);
-    // Leyenda
-    doc.setFillColor(27, 127, 90);
-    doc.rect(14, 42, 8, 4, 'F');
-    doc.setFontSize(7);
-    doc.setTextColor(40, 40, 40);
-    doc.text('Al corriente', 24, 46);
-    doc.setFillColor(166, 39, 58);
-    doc.rect(65, 42, 8, 4, 'F');
-    doc.text('Con adeudo', 75, 46);
-    // Calcular morosos con mas de 3 meses (simplificado: aparecen en meses anteriores)
-    const morosos3m = new Set();
-    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente').forEach(p => {
-      const f = new Date(p.fecha + 'T00:00:00');
-      const mesesAtras = (ano - f.getFullYear()) * 12 + (mes - 1 - f.getMonth());
-      if (mesesAtras >= 3) morosos3m.add(p.unidadId);
-    });
-    // Dibujar mapa grid
-    var filas = [['PB2', 'PB3', 'P8']];
-    for (var fp = 1; fp <= 7; fp++) {
-      var frow = [];
-      for (var fn = 1; fn <= 12; fn++) {
-        frow.push(String(fp) + (fn < 10 ? '0' + String(fn) : String(fn)));
-      }
-      filas.push(frow);
+    L.push(NL);
+    L.push('SECCION 1.5 - GASTOS EXTRAORDINARIOS:' + NL);
+    if (gastosEx.length > 0) {
+      gastosEx.forEach(g => L.push('  ' + g.concepto + ': ' + fN(g.monto) + NL));
+    } else {
+      L.push('  Sin gastos extraordinarios.' + NL);
     }
-    let my = 52;
-    filas.forEach((fila, fi) => {
-      fila.forEach((id, ci) => {
-        const cx = 14 + ci * 15.5;
-        const uid = fi === 0 ? id === 'PB2' ? 'PB2' : id === 'PB3' ? 'PB3' : 'P8' : id;
-        const esMoroso = morosos.has(uid) && !alCorriente.has(uid);
-        const esMoroso3m = morosos3m.has(uid);
-        if (esMoroso3m) doc.setFillColor(139, 0, 0);else if (esMoroso) doc.setFillColor(166, 39, 58);else doc.setFillColor(27, 127, 90);
-        doc.rect(cx, my, 13, 6, 'F');
-        doc.setFontSize(5.5);
-        doc.setTextColor(255, 255, 255);
-        doc.setFont('helvetica', 'bold');
-        doc.text(uid.length > 3 ? uid.slice(0, 3) : uid, cx + 6.5, my + 4, {
-          align: 'center'
-        });
-      });
-      my += 8;
+    L.push('  TOTAL GASTOS EXTRAORDINARIOS: ' + fN(totalGastosEx) + NL + NL);
+    L.push('SECCION 1.6 - TOTAL GASTOS POR MES ' + ano + ':' + NL);
+    serieMes.forEach(s => {
+      if (s.gTot > 0) L.push('  ' + s.m + ': ' + fN(s.gTot) + NL);
     });
-    // Lista top morosos
-    const topMor = [...morosos].filter(id => !alCorriente.has(id)).slice(0, 10);
-    if (topMor.length > 0) {
-      doc.setFontSize(8);
-      doc.setTextColor(11, 37, 69);
-      doc.setFont('helvetica', 'bold');
-      doc.text('LOCALES CON SALDO PENDIENTE EN EL MES:', 14, my + 6);
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(60, 60, 60);
-      doc.text(topMor.map(sanitize).join(' - '), 14, my + 12);
-    }
-    console.log('Pag 11 cxp...'); // --- PAGINA 11: CXP + FOOTER ------------------
+    L.push(NL);
+    L.push('SECCION 1.7 - SALDO EN CAJA POR MES ' + ano + ':' + NL);
+    serieMes.forEach(s => {
+      if (s.ing > 0 || s.gTot > 0) L.push('  ' + s.m + ': ' + fN(Math.max(0, s.saldo)) + NL);
+    });
+    L.push('  SALDO MES ACTUAL: ' + fN(saldoCaja) + NL + NL);
+    L.push('SECCION 2.1 - COBRANZA:' + NL);
+    L.push('  Total locales: ' + unidades.length + NL);
+    L.push('  Al corriente: ' + (unidades.length - soloMorosos.length) + NL);
+    L.push('  Con adeudo: ' + soloMorosos.length + NL);
+    L.push('  Monto recaudado: ' + fN(montoPagado) + NL);
+    L.push('  Monto pendiente: ' + fN(montoPendiente) + NL);
+    L.push('  Cumplimiento: ' + pctCumpl + '%' + NL + NL);
+    L.push('SECCION 2.2 - MAPA DE DEUDORES:' + NL);
+    L.push('  Al corriente: ' + [...alCorriente].sort().join(', ') + NL + NL);
+    L.push('  Con adeudo este mes: ' + soloMorosos.sort().join(', ') + NL + NL);
+    L.push('TOP 10 MOROSOS ACUMULADOS:' + NL);
+    topMor.forEach(([id, tot], i) => L.push('  ' + (i + 1) + '. Local ' + id + ': ' + fN(tot) + NL));
+    L.push(NL);
     if (cxp > 0 || cxpDesc) {
-      doc.addPage();
-      doc.setFillColor(11, 37, 69);
-      doc.rect(0, 0, W, 18, 'F');
-      doc.setFontSize(7);
-      doc.setTextColor(201, 169, 97);
-      doc.setFont('helvetica', 'bold');
-      doc.text('SECCION 2.3', 14, 11);
-      doc.setFontSize(20);
-      doc.setTextColor(11, 37, 69);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Cuentas por pagar', 14, 30);
-      doc.setFontSize(8);
-      doc.setTextColor(100, 110, 125);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Obligaciones financieras pendientes con proveedores del condominio.', 14, 38);
-      doc.autoTable({
-        startY: 44,
-        head: [['PROVEEDOR', 'MONTO ACTUAL']],
-        body: [[sanitize(cxpDesc || 'Por definir'), sanitize(fmt(cxp))], ['TOTAL', sanitize(fmt(cxp))]],
-        headStyles: {
-          fillColor: [11, 37, 69],
-          textColor: 255,
-          fontSize: 9
-        },
-        bodyStyles: {
-          fontSize: 9
-        },
-        columnStyles: {
-          1: {
-            halign: 'right'
-          }
-        },
-        didParseCell: d => {
-          if (d.row.index === 1) {
-            d.cell.styles.fontStyle = 'bold';
-            d.cell.styles.fillColor = [11, 37, 69];
-            d.cell.styles.textColor = [255, 255, 255];
-          }
-        }
-      });
+      L.push('SECCION 2.3 - CUENTAS POR PAGAR:' + NL);
+      L.push('  Proveedor: ' + (cxpDesc || 'Por definir') + NL);
+      L.push('  Monto: ' + fN(cxp) + NL + NL);
     }
-
-    // Footer en todas las paginas
-    const totalPags = doc.getNumberOfPages();
-    for (let i = 1; i <= totalPags; i++) {
-      doc.setPage(i);
-      doc.setFillColor(11, 37, 69);
-      doc.rect(0, H - 10, W, 10, 'F');
-      doc.setFontSize(7);
-      doc.setTextColor(180, 190, 210);
-      doc.setFont('helvetica', 'normal');
-      doc.text('Administracion Edificio Valle Alto ' + ano + ' - Reporte ' + mesNom + ' ' + ano, 14, H - 4);
-      doc.text('Documento N. ' + numReporte, W - 14, H - 4, {
-        align: 'right'
-      });
-    }
-    console.log('Guardando PDF...');
-    doc.save('ReporteEVA_' + mesNom + '_' + ano + '.pdf');
+    L.push(DIV);
+    L.push('RESUMEN EJECUTIVO:' + NL);
+    L.push('  Ingresos: ' + fN(totalIngMes) + NL);
+    L.push('  Gastos Operativos: ' + fN(totalGastosOp) + NL);
+    L.push('  Gastos Extraordinarios: ' + fN(totalGastosEx) + NL);
+    L.push('  Total Gastos: ' + fN(totalGastosMes) + NL);
+    L.push('  SALDO DE CAJA: ' + fN(saldoCaja) + NL);
+    L.push('  Morosidad: ' + soloMorosos.length + ' de ' + unidades.length + ' locales (' + pctCumpl + '% cumplimiento)' + NL + NL);
+    L.push(SEP);
+    L.push('FIN DEL PROMPT - Sistema EVA ' + new Date().toLocaleDateString('es-MX') + NL);
+    L.push(SEP);
+    var txt = L.join('');
+    var blob = new Blob([txt], {
+      type: 'text/plain;charset=utf-8'
+    });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'Prompt_Reporte_EVA_' + mesNom + '_' + ano + '.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
     setMReporte(false);
-    showToast('Reporte ' + mesNom + ' ' + ano + ' generado', 'ok');
+    showToast('Prompt descargado - pegalo en Claude para generar el reporte', 'ok');
   };
 
   /* DATOS DERIVADOS */
