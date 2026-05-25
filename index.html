@@ -359,66 +359,56 @@ function MultiLocalSelect({
   onChange,
   unidades
 }) {
-  const [open, setOpen] = useState(false);
+  const [pisoTab, setPisoTab] = useState('especiales');
   const toggle = id => onChange(selected.includes(id) ? selected.filter(x => x !== id) : [...selected, id]);
-  const label = selected.length === 0 ? 'Seleccionar locales...' : selected.length === 1 ? selected[0] : selected.length + ' locales seleccionados';
+  const toggleAll = ids => {
+    const allSel = ids.every(id => selected.includes(id));
+    if (allSel) {
+      onChange(selected.filter(id => !ids.includes(id)));
+    } else {
+      onChange([...new Set([...selected, ...ids])]);
+    }
+  };
+  const TABS = [['especiales', 'Esp.'], [1, 'P1'], [2, 'P2'], [3, 'P3'], [4, 'P4'], [5, 'P5'], [6, 'P6'], [7, 'P7']];
+  const localesPiso = pisoTab === 'especiales' ? unidades.filter(u => u.tipo === 'local') : unidades.filter(u => u.piso === pisoTab);
+  const allInTab = localesPiso.every(u => selected.includes(u.id));
   return /*#__PURE__*/React.createElement("div", {
-    className: "relative"
+    className: "border border-gray-300 rounded-xl overflow-hidden bg-white"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex border-b border-gray-200 bg-gray-50 overflow-x-auto"
+  }, TABS.map(([key, label]) => /*#__PURE__*/React.createElement("button", {
+    key: key,
+    type: "button",
+    onClick: () => setPisoTab(key),
+    className: 'px-3 py-2 text-xs font-semibold whitespace-nowrap transition border-b-2 ' + (pisoTab === key ? 'border-blue-800 text-blue-800 bg-white' : 'border-transparent text-gray-500 hover:text-gray-700')
+  }, label))), /*#__PURE__*/React.createElement("div", {
+    className: "p-2"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between mb-2 px-1"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "text-xs text-gray-500"
+  }, selected.length, " seleccionado(s)"), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
   }, /*#__PURE__*/React.createElement("button", {
     type: "button",
-    onClick: () => setOpen(!open),
-    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-left flex items-center justify-between focus:ring-2 focus:outline-none bg-white"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: selected.length === 0 ? 'text-gray-400' : 'text-gray-800'
-  }, label), /*#__PURE__*/React.createElement(I.ChevD, {
-    sz: 14,
-    st: {
-      color: '#6B7280'
-    }
-  })), open && /*#__PURE__*/React.createElement("div", {
-    className: "absolute z-20 w-full mt-1 bg-white border border-gray-200 rounded-xl shadow-xl max-h-64 overflow-y-auto"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "p-2 border-b border-gray-100"
-  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => toggleAll(localesPiso.map(u => u.id)),
+    className: "text-xs text-blue-700 hover:underline"
+  }, allInTab ? 'Desel. todos' : 'Sel. todos'), /*#__PURE__*/React.createElement("button", {
+    type: "button",
     onClick: () => onChange([]),
-    className: "text-xs text-gray-500 hover:text-red-600 transition"
-  }, "Limpiar selecci\xF3n")), /*#__PURE__*/React.createElement("div", {
-    className: "p-2"
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-2 mb-1"
-  }, "Locales Especiales"), unidades.filter(u => u.tipo === 'local').map(u => /*#__PURE__*/React.createElement("label", {
+    className: "text-xs text-red-500 hover:underline"
+  }, "Limpiar"))), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-4 gap-1.5"
+  }, localesPiso.map(u => /*#__PURE__*/React.createElement("button", {
     key: u.id,
-    className: `flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-50 transition text-sm ${selected.includes(u.id) ? 'bg-blue-50 text-blue-800 font-medium' : ''}`
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selected.includes(u.id),
-    onChange: () => toggle(u.id),
-    className: "rounded"
-  }), u.codigo)), [1, 2, 3, 4, 5, 6, 7].map(p => /*#__PURE__*/React.createElement("div", {
-    key: p
-  }, /*#__PURE__*/React.createElement("p", {
-    className: "text-[10px] font-semibold text-gray-400 uppercase tracking-wide px-2 mt-2 mb-1"
-  }, "Piso ", p), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-4 gap-1"
-  }, unidades.filter(u => u.piso === p).map(u => /*#__PURE__*/React.createElement("label", {
-    key: u.id,
-    className: `flex items-center justify-center px-1 py-1 rounded cursor-pointer text-xs border transition ${selected.includes(u.id) ? 'bg-blue-800 text-white border-blue-800' : 'border-gray-200 hover:border-gray-400'}`
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    checked: selected.includes(u.id),
-    onChange: () => toggle(u.id),
-    className: "sr-only"
-  }), u.codigo)))))), /*#__PURE__*/React.createElement("div", {
-    className: "p-2 border-t border-gray-100 sticky bottom-0 bg-white"
-  }, /*#__PURE__*/React.createElement("button", {
-    onClick: () => setOpen(false),
-    className: "w-full py-1.5 rounded-lg text-white text-xs font-medium",
+    type: "button",
+    onClick: () => toggle(u.id),
+    className: 'py-1.5 rounded-lg text-xs font-semibold border transition ' + (selected.includes(u.id) ? 'text-white border-transparent' : 'bg-white text-gray-700 border-gray-200 hover:border-blue-400'),
     style: {
-      backgroundColor: C.navy
+      backgroundColor: selected.includes(u.id) ? C.navy : undefined
     }
-  }, "Confirmar (", selected.length, ")"))));
+  }, u.codigo)))));
 }
-
 /*     MODAL REGISTRO PAGOS MULTI-LOCAL               */
 function ModalReg({
   unidades,
@@ -999,6 +989,303 @@ function ModalReportePresent({
 }
 
 /*     COMPONENTE PRINCIPAL                           */
+/*     TAB SALDOS     */
+function TabSaldos({
+  unidades,
+  pagos,
+  esAdmin,
+  db,
+  showToast
+}) {
+  const [ajusteLocal, setAjusteLocal] = useState(null);
+  const [ajusteMonto, setAjusteMonto] = useState('');
+  const [ajusteNota, setAjusteNota] = useState('');
+  const [ajusteSaving, setAjusteSaving] = useState(false);
+  const [busq, setBusq] = useState('');
+  const [filtroEst, setFiltroEst] = useState('todos');
+
+  // Calcular saldo por local basado en pagos reales
+  // Saldo = suma de pagos con estatus 'pagado' MENOS cuota esperada
+  // Para simplificar: saldo pendiente = suma montos pendientes, saldo a favor = pagos extra registrados como 'a_favor'
+  const saldosPorLocal = useMemo(() => {
+    const map = {};
+    unidades.forEach(u => {
+      map[u.id] = {
+        pendiente: 0,
+        pagado: 0,
+        ajuste: 0,
+        notas: []
+      };
+    });
+    pagos.filter(p => !p.cancelado).forEach(p => {
+      if (!map[p.unidadId]) return;
+      if (p.estatus === 'pendiente') map[p.unidadId].pendiente += Number(p.monto);else if (p.estatus === 'pagado') map[p.unidadId].pagado += Number(p.monto);else if (p.estatus === 'a_favor') map[p.unidadId].ajuste += Number(p.monto);
+    });
+    return map;
+  }, [pagos, unidades]);
+  const resumen = useMemo(() => {
+    return unidades.map(u => {
+      const s = saldosPorLocal[u.id] || {
+        pendiente: 0,
+        pagado: 0,
+        ajuste: 0
+      };
+      const saldo = s.ajuste - s.pendiente; // positivo=a favor, negativo=pendiente
+      let estado = 'corriente';
+      if (s.pendiente > 0 && s.ajuste >= s.pendiente) estado = 'a_favor';else if (s.pendiente > 0) estado = 'pendiente';
+      return {
+        id: u.id,
+        codigo: u.codigo,
+        piso: u.piso,
+        tipo: u.tipo,
+        pendiente: s.pendiente,
+        pagado: s.pagado,
+        ajuste: s.ajuste,
+        saldo,
+        estado
+      };
+    });
+  }, [saldosPorLocal, unidades]);
+  const filtrado = useMemo(() => {
+    return resumen.filter(r => {
+      if (filtroEst !== 'todos' && r.estado !== filtroEst) return false;
+      if (busq && !r.codigo.toLowerCase().includes(busq.toLowerCase())) return false;
+      return true;
+    });
+  }, [resumen, busq, filtroEst]);
+  const totales = useMemo(() => ({
+    pendiente: resumen.reduce((s, r) => s + r.pendiente, 0),
+    aFavor: resumen.filter(r => r.estado === 'a_favor').length,
+    enPendiente: resumen.filter(r => r.estado === 'pendiente').length,
+    alCorriente: resumen.filter(r => r.estado === 'corriente').length
+  }), [resumen]);
+  const guardarAjuste = async () => {
+    if (!ajusteLocal || !ajusteMonto) return;
+    if (!db) {
+      showToast('Sin conexion', 'err');
+      return;
+    }
+    setAjusteSaving(true);
+    try {
+      await db.collection('pagos').add({
+        unidadId: ajusteLocal,
+        concepto: 'Ajuste de Saldo',
+        monto: Number(ajusteMonto),
+        fecha: new Date().toISOString().split('T')[0],
+        folio: 'AJUSTE-' + Date.now().toString().slice(-6),
+        estatus: 'a_favor',
+        cancelado: false,
+        nota: ajusteNota || '',
+        createdAt: new Date().toISOString()
+      });
+      showToast('Ajuste registrado', 'ok');
+      setAjusteLocal(null);
+      setAjusteMonto('');
+      setAjusteNota('');
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+    } finally {
+      setAjusteSaving(false);
+    }
+  };
+  const colEstado = {
+    corriente: {
+      bg: '#D1FAE5',
+      color: '#1B7F5A',
+      label: 'Al corriente'
+    },
+    pendiente: {
+      bg: '#FEE2E2',
+      color: '#A6273A',
+      label: 'Pendiente'
+    },
+    a_favor: {
+      bg: '#DBEAFE',
+      color: '#1D4ED8',
+      label: 'A favor'
+    }
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 lg:grid-cols-4 gap-3"
+  }, [{
+    label: 'Al corriente',
+    val: totales.alCorriente,
+    color: '#1B7F5A',
+    bg: '#D1FAE5'
+  }, {
+    label: 'Con pendiente',
+    val: totales.enPendiente,
+    color: '#A6273A',
+    bg: '#FEE2E2'
+  }, {
+    label: 'Con saldo a favor',
+    val: totales.aFavor,
+    color: '#1D4ED8',
+    bg: '#DBEAFE'
+  }, {
+    label: 'Total locales',
+    val: unidades.length,
+    color: '#0B2545',
+    bg: '#EFF6FF'
+  }].map((k, i) => /*#__PURE__*/React.createElement("div", {
+    key: i,
+    className: "bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-xs text-gray-500 uppercase tracking-wide mb-1"
+  }, k.label), /*#__PURE__*/React.createElement("div", {
+    className: "text-3xl font-bold",
+    style: {
+      color: k.color
+    }
+  }, k.val)))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex flex-wrap gap-3 items-center"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: filtroEst,
+    onChange: e => setFiltroEst(e.target.value),
+    className: "px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "todos"
+  }, "Todos los estatus"), /*#__PURE__*/React.createElement("option", {
+    value: "corriente"
+  }, "Al corriente"), /*#__PURE__*/React.createElement("option", {
+    value: "pendiente"
+  }, "Con pendiente"), /*#__PURE__*/React.createElement("option", {
+    value: "a_favor"
+  }, "Con saldo a favor")), /*#__PURE__*/React.createElement("div", {
+    className: "relative"
+  }, /*#__PURE__*/React.createElement(I.Search, {
+    sz: 14,
+    cls: "absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"
+  }), /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    placeholder: "Buscar local...",
+    value: busq,
+    onChange: e => setBusq(e.target.value),
+    className: "pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none w-40"
+  })), esAdmin && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setAjusteLocal('nuevo'),
+    className: "flex items-center gap-1.5 px-3 py-2 rounded-lg text-white text-sm font-medium",
+    style: {
+      backgroundColor: '#0B2545'
+    }
+  }, /*#__PURE__*/React.createElement(I.Plus, {
+    sz: 14
+  }), "Registrar ajuste"))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "px-5 py-3 border-b border-gray-200 flex items-center justify-between"
+  }, /*#__PURE__*/React.createElement("h3", {
+    className: "font-semibold text-sm tracking-wide",
+    style: {
+      color: '#0B2545'
+    }
+  }, "RELACION DE SALDOS (", filtrado.length, " locales)"), /*#__PURE__*/React.createElement("span", {
+    className: "text-xs text-gray-400"
+  }, "Solo lectura", esAdmin ? ' - Admin puede ajustar' : '')), /*#__PURE__*/React.createElement("div", {
+    className: "overflow-x-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-sm"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: {
+      backgroundColor: '#F4F5F7'
+    }
+  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Monto Pagado', 'Monto Pendiente', 'Ajuste a Favor', 'Estatus'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: 'px-4 py-3 font-semibold text-xs uppercase tracking-wider ' + (h === 'Local' ? 'text-left' : 'text-right last:text-center'),
+    style: {
+      color: '#0B2545'
+    }
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, filtrado.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
+    colSpan: 5,
+    className: "px-4 py-10 text-center text-gray-400"
+  }, "Sin registros que coincidan")) : filtrado.map(r => {
+    const ce = colEstado[r.estado] || colEstado.corriente;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: r.id,
+      className: "border-t border-gray-100 hover:bg-blue-50/20 transition-colors"
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "px-4 py-3 font-semibold",
+      style: {
+        color: '#0B2545'
+      }
+    }, r.codigo), /*#__PURE__*/React.createElement("td", {
+      className: "px-4 py-3 text-right text-gray-700"
+    }, r.pagado > 0 ? '$' + Number(r.pagado).toLocaleString('es-MX', {
+      minimumFractionDigits: 2
+    }) : '-'), /*#__PURE__*/React.createElement("td", {
+      className: "px-4 py-3 text-right",
+      style: {
+        color: r.pendiente > 0 ? '#A6273A' : '#9CA3AF'
+      }
+    }, r.pendiente > 0 ? '$' + Number(r.pendiente).toLocaleString('es-MX', {
+      minimumFractionDigits: 2
+    }) : '-'), /*#__PURE__*/React.createElement("td", {
+      className: "px-4 py-3 text-right",
+      style: {
+        color: r.ajuste > 0 ? '#1D4ED8' : '#9CA3AF'
+      }
+    }, r.ajuste > 0 ? '$' + Number(r.ajuste).toLocaleString('es-MX', {
+      minimumFractionDigits: 2
+    }) : '-'), /*#__PURE__*/React.createElement("td", {
+      className: "px-4 py-3 text-center"
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "inline-block px-2.5 py-1 rounded-full text-xs font-semibold",
+      style: {
+        backgroundColor: ce.bg,
+        color: ce.color
+      }
+    }, ce.label)));
+  }))))), ajusteLocal && /*#__PURE__*/React.createElement(Modal, {
+    title: "Registrar Ajuste de Saldo",
+    onClose: () => {
+      setAjusteLocal(null);
+      setAjusteMonto('');
+      setAjusteNota('');
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-gray-500 bg-blue-50 border border-blue-200 rounded-lg p-3"
+  }, "Registra un saldo a favor para un local (pago anticipado o credito). Solo visible para administradores."), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Local"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: ajusteLocal === 'nuevo' ? '' : ajusteLocal,
+    onChange: e => setAjusteLocal(e.target.value),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "Seleccionar..."), unidades.map(u => /*#__PURE__*/React.createElement("option", {
+    key: u.id,
+    value: u.id
+  }, u.codigo)))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Monto a favor ($)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "number",
+    value: ajusteMonto,
+    onChange: e => setAjusteMonto(e.target.value),
+    placeholder: "0.00",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Nota (opcional)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "text",
+    value: ajusteNota,
+    onChange: e => setAjusteNota(e.target.value),
+    placeholder: "Ej. Pago anticipado Junio 2026",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  })), /*#__PURE__*/React.createElement("button", {
+    onClick: guardarAjuste,
+    disabled: ajusteSaving || !ajusteLocal || ajusteLocal === 'nuevo' || !ajusteMonto,
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 disabled:opacity-40",
+    style: {
+      backgroundColor: '#0B2545'
+    }
+  }, ajusteSaving ? 'Guardando...' : 'Registrar ajuste'))));
+}
 function App() {
   const unidades = useMemo(() => generarUnidades(), []);
   const dbRef = useRef(null),
@@ -2015,7 +2302,7 @@ function App() {
     className: "max-w-7xl mx-auto px-4 sm:px-6 py-6"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex gap-0 mb-6 border-b border-gray-200 bg-white rounded-t-xl shadow-sm overflow-x-auto"
-  }, [['actual', `Mes Actual (${MESES_L[now.getMonth()].slice(0, 3)})`], ['historico', 'Hist rico'], ['morosos', 'Top Morosos'], ['gastos', 'Gastos']].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
+  }, [['actual', `Mes Actual (${MESES_L[now.getMonth()].slice(0, 3)})`], ['historico', 'Historico'], ['morosos', 'Top Morosos'], ['gastos', 'Gastos'], ['saldos', 'Saldos']].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
     key: k,
     onClick: () => setTab(k),
     className: `px-4 sm:px-5 py-3.5 text-sm whitespace-nowrap transition ${tab === k ? 'tab-active' : 'tab-inactive hover:text-gray-600'}`
@@ -2479,7 +2766,13 @@ function App() {
     style: {
       color: C.err
     }
-  }, fmt(top10.reduce((s, m) => s + m.total, 0)))))), tab === 'gastos' && /*#__PURE__*/React.createElement("div", {
+  }, fmt(top10.reduce((s, m) => s + m.total, 0)))))), tab === 'saldos' && /*#__PURE__*/React.createElement(TabSaldos, {
+    unidades: unidades,
+    pagos: pagos,
+    esAdmin: esAdmin,
+    db: dbRef.current,
+    showToast: showToast
+  }), tab === 'gastos' && /*#__PURE__*/React.createElement("div", {
     className: "space-y-5"
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 sm:grid-cols-3 gap-4"
