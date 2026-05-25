@@ -789,27 +789,76 @@ function ModalImport({
       window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_gastos.xlsx');
       return;
     }
-    // Plantilla HORIZONTAL para pagos: una fila por local, un concepto por columna
-    const CONCS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+    // Plantilla de pagos actualizada con nueva logica cargo/abono
+    // La Cuota de Mantenimiento se genera automaticamente con el boton admin
+    // Esta plantilla es solo para: conceptos VARIABLES + ABONOS recibidos
     const localesList = ['PB2', 'PB3', 'Piso 8', '101', '102', '103', '104', '105', '106', '107', '108', '109', '110', '111', '112', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210', '211', '212', '301', '302', '303', '304', '305', '306', '307', '308', '309', '310', '311', '312', '401', '402', '403', '404', '405', '406', '407', '408', '409', '410', '411', '412', '501', '502', '503', '504', '505', '506', '507', '508', '509', '510', '511', '512', '601', '602', '603', '604', '605', '606', '607', '608', '609', '610', '611', '612', '701', '702', '703', '704', '705', '706', '707', '708', '709', '710', '711', '712'];
     const hoy = new Date().toISOString().split('T')[0];
-    const datos = localesList.map((loc, i) => {
+    // Hoja 1: CARGOS VARIABLES (servicios, estacionamiento, etc.)
+    // Una fila por local, columnas = conceptos variables
+    const VARS = ['Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+    const datosCargos = localesList.map((loc, i) => {
       const row = {
         Local: loc,
+        Tipo: 'cargo',
         Folio: 'F-' + (i + 1).toString().padStart(3, '0'),
-        Fecha: hoy,
-        Estatus: 'pagado'
+        Fecha: hoy
       };
-      CONCS.forEach(c => {
+      VARS.forEach(c => {
         row[c] = '';
       });
       return row;
     });
-    const ws = window.XLSX.utils.json_to_sheet(datos);
-    // Estilo de encabezados
+    // Hoja 2: ABONOS (pagos recibidos de condominios)
+    // Una fila por pago recibido - formato vertical
+    const datosAbonos = [{
+      Locales: '101',
+      Tipo: 'abono',
+      Concepto: 'Pago mensual',
+      Monto: '',
+      Fecha: hoy,
+      Folio: ''
+    }, {
+      Locales: '102',
+      Tipo: 'abono',
+      Concepto: 'Pago mensual',
+      Monto: '',
+      Fecha: hoy,
+      Folio: ''
+    }, {
+      Locales: '103',
+      Tipo: 'abono',
+      Concepto: 'Pago mensual',
+      Monto: '',
+      Fecha: hoy,
+      Folio: ''
+    }];
     const wb = window.XLSX.utils.book_new();
-    window.XLSX.utils.book_append_sheet(wb, ws, 'Pagos');
-    window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_pagos_horizontal.xlsx');
+    // Hoja de cargos variables (horizontal)
+    const wsCargos = window.XLSX.utils.json_to_sheet(datosCargos);
+    window.XLSX.utils.book_append_sheet(wb, wsCargos, 'Cargos Variables');
+    // Hoja de abonos (vertical)
+    const wsAbonos = window.XLSX.utils.json_to_sheet(datosAbonos);
+    window.XLSX.utils.book_append_sheet(wb, wsAbonos, 'Abonos');
+    // Hoja de instrucciones
+    const instrucciones = [{
+      Instruccion: 'HOJA 1 - Cargos Variables: llena los montos de conceptos variables (Servicios agua/luz, estacionamiento, etc.)'
+    }, {
+      Instruccion: 'Los montos vacios se ignoraran al importar'
+    }, {
+      Instruccion: 'La Cuota de Mantenimiento NO va aqui - se genera automaticamente con el boton "Generar Cargos del Mes"'
+    }, {
+      Instruccion: 'HOJA 2 - Abonos: registra los pagos recibidos de cada condomino'
+    }, {
+      Instruccion: 'Agrega una fila por cada pago recibido'
+    }, {
+      Instruccion: 'Tipo siempre debe ser: abono'
+    }, {
+      Instruccion: 'El sistema calculara automaticamente si hay saldo a favor'
+    }];
+    const wsInstr = window.XLSX.utils.json_to_sheet(instrucciones);
+    window.XLSX.utils.book_append_sheet(wb, wsInstr, 'Instrucciones');
+    window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_pagos.xlsx');
   };
   const leer = async e => {
     setErr('');
@@ -1572,13 +1621,15 @@ function App() {
       const b = dbRef.current.batch();
       let total = 0;
       if (esHorizontal) {
+        // Plantilla horizontal de CARGOS VARIABLES
+        const VARS_COLS = ['Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
         rows.forEach(r => {
           const uid = String(r.Local || '').trim();
           if (!uid) return;
           const fecha = excelFecha(r.Fecha);
           const folio = String(r.Folio || '');
-          const estatus = String(r.Estatus || 'pagado').toLowerCase();
-          CONCS_COLS.forEach(conc => {
+          const tipoMovH = String(r.Tipo || 'cargo').toLowerCase();
+          VARS_COLS.forEach(conc => {
             const montoRaw = r[conc];
             if (!montoRaw && montoRaw !== 0) return;
             const monto = Number(String(montoRaw).replace(/[$, ]/g, ''));
@@ -1589,7 +1640,8 @@ function App() {
               monto,
               fecha,
               folio,
-              estatus,
+              tipoMov: tipoMovH,
+              estatus: tipoMovH === 'abono' ? 'pagado' : 'pendiente',
               cancelado: false,
               createdAt: new Date().toISOString()
             });
