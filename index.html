@@ -84,6 +84,17 @@ const PIE_COLORS = ['#0B2545', '#C9A961', '#2C2F36', '#1B7F5A', '#E07B39', '#0E6
 /* Conceptos que se agrupan en "Caj n, Bodega y Tarjetas" en la dona del dashboard */
 const CONCEPTOS_CAJON = ['Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Otros'];
 const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+
+// Cuotas fijas de mantenimiento por local
+const CUOTA_FIJA = {
+  'PB2': 4140,
+  'P8': 20000
+  // Todos los demas: 2800
+};
+const getCuotaFija = uid => CUOTA_FIJA[uid] || 2800;
+
+// Tipos de movimiento
+const TIPOS_MOV = ['cargo', 'abono'];
 const MESES_L = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 const MESES_S = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
@@ -428,6 +439,7 @@ function ModalReg({
   const [uids, setUids] = useState([]);
   const [fecha, setFecha] = useState(new Date().toISOString().split('T')[0]);
   const [folio, setFolio] = useState('');
+  const [tipoMov, setTipoMov] = useState('cargo');
   const [parcial, setParcial] = useState(false);
   const [lineas, setLineas] = useState([{
     concepto: CONCEPTOS[0],
@@ -458,7 +470,8 @@ function ModalReg({
         folio,
         concepto: l.concepto,
         monto: Number(l.monto),
-        estatus: parcial ? l.pagado ? 'pagado' : 'pendiente' : 'pagado',
+        tipoMov: tipoMov,
+        estatus: tipoMov === 'abono' ? 'pagado' : parcial ? l.pagado ? 'pagado' : 'pendiente' : 'pendiente',
         cancelado: false,
         createdAt: new Date().toISOString()
       }));
@@ -503,13 +516,28 @@ function ModalReg({
     onChange: e => setFolio(e.target.value),
     placeholder: "Ej. F-001",
     className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
-  })), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Tipo de movimiento *"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, [['cargo', 'Cargo (cobro al condomino)'], ['abono', 'Abono (pago recibido)']].map(([v, l]) => /*#__PURE__*/React.createElement("button", {
+    key: v,
+    type: "button",
+    onClick: () => setTipoMov(v),
+    className: 'flex-1 py-2.5 rounded-lg text-sm font-semibold border-2 transition ' + (tipoMov === v ? 'text-white border-transparent' : 'bg-white border-gray-200 text-gray-600 hover:border-gray-400'),
+    style: {
+      backgroundColor: tipoMov === v ? v === 'cargo' ? '#A6273A' : '#1B7F5A' : undefined
+    }
+  }, v === 'cargo' ? '  Cargo' : '  Abono', /*#__PURE__*/React.createElement("span", {
+    className: "block text-xs font-normal mt-0.5 opacity-80"
+  }, l.split('(')[1].replace(')', '')))))), tipoMov === 'cargo' && /*#__PURE__*/React.createElement("div", {
     className: "flex items-center gap-3 p-3 rounded-lg",
     style: {
       backgroundColor: '#FFF7ED',
       border: '1px solid #FED7AA'
     }
   }, /*#__PURE__*/React.createElement("button", {
+    type: "button",
     onClick: () => setParcial(!parcial),
     className: `relative w-11 h-6 rounded-full transition-colors ${parcial ? 'bg-orange-500' : 'bg-gray-300'}`
   }, /*#__PURE__*/React.createElement("span", {
@@ -518,7 +546,14 @@ function ModalReg({
     className: "text-sm font-semibold text-orange-700"
   }, "Pago Parcial"), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-orange-600"
-  }, "Activa si solo se pagaron algunos conceptos"))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }, "Activa si solo se pagaron algunos conceptos"))), tipoMov === 'abono' && /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg text-xs",
+    style: {
+      background: '#F0FDF4',
+      border: '1px solid #BBF7D0',
+      color: '#166534'
+    }
+  }, "El abono se aplicara automaticamente al saldo pendiente del local. Si excede la deuda, el restante queda como saldo a favor."), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between mb-2"
   }, /*#__PURE__*/React.createElement("span", {
     className: "text-xs font-semibold text-gray-600 uppercase tracking-wide"
@@ -576,11 +611,11 @@ function ModalReg({
     disabled: syncing,
     className: "w-full py-2.5 rounded-lg text-white font-medium text-sm transition hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2",
     style: {
-      backgroundColor: C.navy
+      backgroundColor: tipoMov === 'abono' ? '#1B7F5A' : C.navy
     }
   }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
     sz: 16
-  }), "Guardando...") : uids.length > 1 ? 'Registrar en ' + uids.length + ' locales' : 'Registrar en Firebase')));
+  }), "Guardando...") : /*#__PURE__*/React.createElement(React.Fragment, null, tipoMov === 'abono' ? 'Registrar Abono' : 'Registrar Cargo', uids.length > 1 ? ' (' + uids.length + ' locales)' : ''))));
 }
 
 /*     MODAL ESTADO DE CUENTA MULTI-LOCAL             */
@@ -729,7 +764,7 @@ function ModalImport({
 }) {
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState('');
-  const colsPagos = ['Locales', 'Concepto', 'Monto', 'Fecha', 'Folio', 'Estatus'];
+  const colsPagos = ['Locales', 'Tipo', 'Concepto', 'Monto', 'Fecha', 'Folio'];
   const colsGastos = ['Fecha', 'Concepto', 'Monto', 'Descripcion', 'Tipo'];
   const cols = tipo === 'pagos' ? colsPagos : colsGastos;
   const descargar = async () => {
@@ -1016,40 +1051,42 @@ function TabSaldos({
   // Calcular saldo por local basado en pagos reales
   // Saldo = suma de pagos con estatus 'pagado' MENOS cuota esperada
   // Para simplificar: saldo pendiente = suma montos pendientes, saldo a favor = pagos extra registrados como 'a_favor'
+  // Calcular saldo real: abonos - cargos
   const saldosPorLocal = useMemo(() => {
     const map = {};
     unidades.forEach(u => {
       map[u.id] = {
-        pendiente: 0,
-        pagado: 0,
-        ajuste: 0,
-        notas: []
+        cargos: 0,
+        abonos: 0
       };
     });
     pagos.filter(p => !p.cancelado).forEach(p => {
       if (!map[p.unidadId]) return;
-      if (p.estatus === 'pendiente') map[p.unidadId].pendiente += Number(p.monto);else if (p.estatus === 'pagado') map[p.unidadId].pagado += Number(p.monto);else if (p.estatus === 'a_favor') map[p.unidadId].ajuste += Number(p.monto);
+      if (p.tipoMov === 'abono' || p.estatus === 'a_favor') {
+        map[p.unidadId].abonos += Number(p.monto);
+      } else {
+        // cargo o registro sin tipoMov (compatibilidad con datos anteriores)
+        map[p.unidadId].cargos += Number(p.monto);
+      }
     });
     return map;
   }, [pagos, unidades]);
   const resumen = useMemo(() => {
     return unidades.map(u => {
       const s = saldosPorLocal[u.id] || {
-        pendiente: 0,
-        pagado: 0,
-        ajuste: 0
+        cargos: 0,
+        abonos: 0
       };
-      const saldo = s.ajuste - s.pendiente; // positivo=a favor, negativo=pendiente
+      const saldo = s.abonos - s.cargos; // positivo=a favor, negativo=pendiente, 0=corriente
       let estado = 'corriente';
-      if (s.pendiente > 0 && s.ajuste >= s.pendiente) estado = 'a_favor';else if (s.pendiente > 0) estado = 'pendiente';
+      if (saldo > 0) estado = 'a_favor';else if (saldo < 0) estado = 'pendiente';
       return {
         id: u.id,
         codigo: u.codigo,
         piso: u.piso,
         tipo: u.tipo,
-        pendiente: s.pendiente,
-        pagado: s.pagado,
-        ajuste: s.ajuste,
+        cargos: s.cargos,
+        abonos: s.abonos,
         saldo,
         estado
       };
@@ -1222,22 +1259,25 @@ function TabSaldos({
         color: '#0B2545'
       }
     }, r.codigo), /*#__PURE__*/React.createElement("td", {
-      className: "px-4 py-3 text-right text-gray-700"
-    }, r.pagado > 0 ? '$' + Number(r.pagado).toLocaleString('es-MX', {
+      className: "px-4 py-3 text-right",
+      style: {
+        color: '#A6273A'
+      }
+    }, r.cargos > 0 ? '$' + Number(r.cargos).toLocaleString('es-MX', {
       minimumFractionDigits: 2
     }) : '-'), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-right",
       style: {
-        color: r.pendiente > 0 ? '#A6273A' : '#9CA3AF'
+        color: '#1B7F5A'
       }
-    }, r.pendiente > 0 ? '$' + Number(r.pendiente).toLocaleString('es-MX', {
+    }, r.abonos > 0 ? '$' + Number(r.abonos).toLocaleString('es-MX', {
       minimumFractionDigits: 2
     }) : '-'), /*#__PURE__*/React.createElement("td", {
-      className: "px-4 py-3 text-right",
+      className: "px-4 py-3 text-right font-bold",
       style: {
-        color: r.ajuste > 0 ? '#1D4ED8' : '#9CA3AF'
+        color: r.saldo > 0 ? '#1D4ED8' : r.saldo < 0 ? '#A6273A' : '#9CA3AF'
       }
-    }, r.ajuste > 0 ? '$' + Number(r.ajuste).toLocaleString('es-MX', {
+    }, r.saldo !== 0 ? '$' + Math.abs(r.saldo).toLocaleString('es-MX', {
       minimumFractionDigits: 2
     }) : '-'), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-center"
@@ -1313,6 +1353,9 @@ function App() {
     type: 'ok'
   });
   const [mAuth, setMAuth] = useState(false);
+  const [mCargos, setMCargos] = useState(false);
+  const [cargosMes, setCargosMes] = useState(new Date().getMonth() + 1);
+  const [cargosAno, setCargosAno] = useState(new Date().getFullYear());
   const [mReg, setMReg] = useState(false);
   const [mEdo, setMEdo] = useState(false);
   const [mImport, setMImport] = useState(false);
@@ -1426,6 +1469,44 @@ function App() {
   useEffect(() => setGPg(1), [gMes, gAno]);
 
   /* ACCIONES */
+  // Generar cargos fijos del mes autom ticamente
+  const generarCargosMes = async (mes, ano) => {
+    if (!dbRef.current || !esAdmin) return;
+    const mesStr = String(mes).padStart(2, '0');
+    const fechaCargo = ano + '-' + mesStr + '-01';
+    // Verificar si ya existen cargos de mantenimiento para este mes
+    const snap = await dbRef.current.collection('pagos').where('concepto', '==', 'Cuota de Mantenimiento').where('tipoMov', '==', 'cargo').where('fecha', '==', fechaCargo).get();
+    if (!snap.empty) {
+      showToast('Ya existen cargos de mantenimiento para este mes', 'err');
+      return false;
+    }
+    setSyncing(true);
+    try {
+      const b = dbRef.current.batch();
+      const folioBase = 'MNT-' + ano + mesStr;
+      unidades.forEach((u, idx) => {
+        const monto = getCuotaFija(u.id);
+        b.set(dbRef.current.collection('pagos').doc(), {
+          unidadId: u.id,
+          concepto: 'Cuota de Mantenimiento',
+          monto: monto,
+          fecha: fechaCargo,
+          folio: folioBase + '-' + String(idx + 1).padStart(3, '0'),
+          tipoMov: 'cargo',
+          estatus: 'pendiente',
+          cancelado: false,
+          createdAt: new Date().toISOString()
+        });
+      });
+      await b.commit();
+      showToast('Cargos generados para ' + unidades.length + ' locales', 'ok');
+      return true;
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+      setSyncing(false);
+      return false;
+    }
+  };
   const log = async (a, id, d = {}) => {
     if (!dbRef.current) return;
     try {
@@ -1437,16 +1518,45 @@ function App() {
       });
     } catch (e) {}
   };
+  const calcSaldoFavor = async uid => {
+    if (!dbRef.current) return 0;
+    try {
+      const snap = await dbRef.current.collection('pagos').where('unidadId', '==', uid).where('cancelado', '==', false).get();
+      let abonos = 0,
+        cargos = 0;
+      snap.docs.forEach(d => {
+        const p = d.data();
+        if (p.tipoMov === 'abono' || p.estatus === 'a_favor') {
+          abonos += Number(p.monto);
+        } else {
+          cargos += Number(p.monto);
+        }
+      });
+      return Math.max(0, abonos - cargos);
+    } catch (e) {
+      return 0;
+    }
+  };
   const guardarPagos = async rs => {
     if (!dbRef.current) return;
     setSyncing(true);
     try {
       const b = dbRef.current.batch();
-      rs.forEach(r => {
-        b.set(dbRef.current.collection('pagos').doc(), r);
-      });
+      for (const r of rs) {
+        var reg = {
+          ...r
+        };
+        if (r.tipoMov === 'cargo' && r.estatus === 'pendiente') {
+          var sf = await calcSaldoFavor(r.unidadId);
+          if (sf >= r.monto) {
+            reg.estatus = 'pagado';
+            reg.nota = 'Cubierto con saldo a favor ($' + sf.toLocaleString('es-MX') + ')';
+          }
+        }
+        b.set(dbRef.current.collection('pagos').doc(), reg);
+      }
       await b.commit();
-      showToast(`${rs.length} registro(s) guardado(s)`, 'ok');
+      showToast(rs.length + ' registro(s) guardado(s)', 'ok');
       setMReg(false);
     } catch (e) {
       showToast('Error: ' + e.message, 'err');
@@ -1491,6 +1601,7 @@ function App() {
           const montoVal = Number(String(r.Monto || '').replace(/[$, ]/g, ''));
           if (!r.Monto || isNaN(montoVal) || montoVal <= 0) return;
           const locales = String(r.Locales || '').split(',').map(x => x.trim()).filter(Boolean);
+          const tipoMovImp = String(r.Tipo || 'cargo').toLowerCase();
           locales.forEach(uid => {
             b.set(dbRef.current.collection('pagos').doc(), {
               unidadId: uid,
@@ -1498,7 +1609,8 @@ function App() {
               monto: montoVal,
               fecha: excelFecha(r.Fecha),
               folio: String(r.Folio || ''),
-              estatus: String(r.Estatus || 'pagado').toLowerCase(),
+              tipoMov: tipoMovImp,
+              estatus: tipoMovImp === 'abono' ? 'pagado' : 'pendiente',
               cancelado: false,
               createdAt: new Date().toISOString()
             });
@@ -2544,7 +2656,15 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement(I.Plus, {
     sz: 15
-  }), "Registrar Pago"), /*#__PURE__*/React.createElement("button", {
+  }), "Registrar Pago"), esAdmin && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMCargos(true),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:shadow-md transition",
+    style: {
+      background: '#7C3AED'
+    }
+  }, /*#__PURE__*/React.createElement(I.Alert, {
+    sz: 15
+  }), "Generar Cargos del Mes"), /*#__PURE__*/React.createElement("button", {
     onClick: exportarExcel,
     className: "flex items-center gap-2 px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 bg-white hover:bg-gray-50 transition",
     style: {
@@ -2630,6 +2750,10 @@ function App() {
   }, p.unidadId, p.cancelado && /*#__PURE__*/React.createElement("span", {
     className: "ml-1 text-[10px] bg-red-100 text-red-700 px-1 py-0.5 rounded"
   }, "CANCEL.")), /*#__PURE__*/React.createElement("td", {
+    className: "px-4 py-3 text-center"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: 'inline-block px-2 py-0.5 rounded-full text-xs font-semibold ' + (p.tipoMov === 'abono' ? 'bg-green-100 text-green-700' : 'bg-red-50 text-red-700')
+  }, p.tipoMov === 'abono' ? 'Abono' : 'Cargo')), /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-3 text-gray-700 text-xs"
   }, p.concepto), /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-3 text-right font-medium"
@@ -3041,7 +3165,57 @@ function App() {
     onClose: () => setMReg(false),
     onSave: guardarPagos,
     syncing: syncing
-  }), mEdo && /*#__PURE__*/React.createElement(ModalEdo, {
+  }), mCargos && /*#__PURE__*/React.createElement(Modal, {
+    title: "Generar Cargos Fijos del Mes",
+    onClose: () => setMCargos(false)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg text-xs",
+    style: {
+      background: '#F5F3FF',
+      border: '1px solid #DDD6FE',
+      color: '#5B21B6'
+    }
+  }, "Genera automaticamente los cargos de ", /*#__PURE__*/React.createElement("strong", null, "Cuota de Mantenimiento"), " para los 87 locales. PB2: $4,140 | Piso 8: $20,000 | Resto: $2,800"), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-2 gap-3"
+  }, /*#__PURE__*/React.createElement(Lbl, {
+    text: "Mes"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: cargosMes,
+    onChange: e => setCargosMes(Number(e.target.value)),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, MESES_L.map((m, i) => /*#__PURE__*/React.createElement("option", {
+    key: i,
+    value: i + 1
+  }, m)))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "A\xF1o"
+  }, /*#__PURE__*/React.createElement("select", {
+    value: cargosAno,
+    onChange: e => setCargosAno(Number(e.target.value)),
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none"
+  }, [new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map(a => /*#__PURE__*/React.createElement("option", {
+    key: a,
+    value: a
+  }, a))))), /*#__PURE__*/React.createElement("div", {
+    className: "bg-gray-50 rounded-lg p-3 text-xs text-gray-600"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-semibold mb-1"
+  }, "Se generaran ", unidades.length, " cargos:"), /*#__PURE__*/React.createElement("p", null, "87 locales x $2,800 = $243,600 + PB2 ($4,140) + Piso 8 ($20,000)"), /*#__PURE__*/React.createElement("p", {
+    className: "font-bold mt-1"
+  }, "Total cuotas: $", (84 * 2800 + 4140 + 20000).toLocaleString('es-MX'))), /*#__PURE__*/React.createElement("button", {
+    onClick: async () => {
+      const ok = await generarCargosMes(cargosMes, cargosAno);
+      if (ok) setMCargos(false);
+    },
+    disabled: syncing,
+    className: "w-full py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 disabled:opacity-50 flex items-center justify-center gap-2",
+    style: {
+      backgroundColor: '#7C3AED'
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 16
+  }), "Generando...") : 'Generar ' + unidades.length + ' cargos para ' + MESES_L[cargosMes - 1] + ' ' + cargosAno))), mEdo && /*#__PURE__*/React.createElement(ModalEdo, {
     unidades: unidades,
     onClose: () => setMEdo(false),
     onGen: genEdoCuenta
