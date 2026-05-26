@@ -1120,15 +1120,30 @@ function TabSaldos({
     });
     return map;
   }, [pagos, unidades]);
+
+  // Detectar mora grave: cargos pendientes con 3+ meses de antiguedad
+  const moraGrave = useMemo(() => {
+    const hoy = new Date();
+    const grave = new Set();
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente' && p.tipoMov === 'cargo').forEach(p => {
+      const fechaRef = p.fechaVencimiento || p.fecha;
+      if (!fechaRef) return;
+      const f = new Date(fechaRef + 'T00:00:00');
+      const mesesAtras = (hoy.getFullYear() - f.getFullYear()) * 12 + (hoy.getMonth() - f.getMonth());
+      if (mesesAtras >= 3) grave.add(p.unidadId);
+    });
+    return grave;
+  }, [pagos]);
   const resumen = useMemo(() => {
     return unidades.map(u => {
       const s = saldosPorLocal[u.id] || {
         cargos: 0,
         abonos: 0
       };
-      const saldo = s.abonos - s.cargos; // positivo=a favor, negativo=pendiente, 0=corriente
+      const saldo = s.abonos - s.cargos;
+      const grave = moraGrave.has(u.id);
       let estado = 'corriente';
-      if (saldo > 0) estado = 'a_favor';else if (saldo < 0) estado = 'pendiente';
+      if (saldo > 0) estado = 'a_favor';else if (saldo < 0) estado = grave ? 'mora_grave' : 'pendiente';
       return {
         id: u.id,
         codigo: u.codigo,
@@ -1137,10 +1152,11 @@ function TabSaldos({
         cargos: s.cargos,
         abonos: s.abonos,
         saldo,
-        estado
+        estado,
+        grave
       };
     });
-  }, [saldosPorLocal, unidades]);
+  }, [saldosPorLocal, unidades, moraGrave]);
   const filtrado = useMemo(() => {
     return resumen.filter(r => {
       if (filtroEst !== 'todos' && r.estado !== filtroEst) return false;
@@ -1149,9 +1165,9 @@ function TabSaldos({
     });
   }, [resumen, busq, filtroEst]);
   const totales = useMemo(() => ({
-    pendiente: resumen.reduce((s, r) => s + r.pendiente, 0),
     aFavor: resumen.filter(r => r.estado === 'a_favor').length,
     enPendiente: resumen.filter(r => r.estado === 'pendiente').length,
+    moraGrave: resumen.filter(r => r.estado === 'mora_grave').length,
     alCorriente: resumen.filter(r => r.estado === 'corriente').length
   }), [resumen]);
   const guardarAjuste = async () => {
@@ -1190,9 +1206,14 @@ function TabSaldos({
       label: 'Al corriente'
     },
     pendiente: {
-      bg: '#FEE2E2',
-      color: '#A6273A',
+      bg: '#FEF3C7',
+      color: '#B45309',
       label: 'Pendiente'
+    },
+    mora_grave: {
+      bg: '#FEE2E2',
+      color: '#7F1D1D',
+      label: 'Mora grave +3m'
     },
     a_favor: {
       bg: '#DBEAFE',
@@ -1212,18 +1233,18 @@ function TabSaldos({
   }, {
     label: 'Con pendiente',
     val: totales.enPendiente,
-    color: '#A6273A',
+    color: '#B45309',
+    bg: '#FEF3C7'
+  }, {
+    label: 'Mora grave +3m',
+    val: totales.moraGrave,
+    color: '#7F1D1D',
     bg: '#FEE2E2'
   }, {
     label: 'Con saldo a favor',
     val: totales.aFavor,
     color: '#1D4ED8',
     bg: '#DBEAFE'
-  }, {
-    label: 'Total locales',
-    val: unidades.length,
-    color: '#0B2545',
-    bg: '#EFF6FF'
   }].map((k, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "bg-white rounded-xl border border-gray-200 p-4 shadow-sm"
@@ -1249,6 +1270,8 @@ function TabSaldos({
   }, "Al corriente"), /*#__PURE__*/React.createElement("option", {
     value: "pendiente"
   }, "Con pendiente"), /*#__PURE__*/React.createElement("option", {
+    value: "mora_grave"
+  }, "Mora grave (+3 meses)"), /*#__PURE__*/React.createElement("option", {
     value: "a_favor"
   }, "Con saldo a favor")), /*#__PURE__*/React.createElement("div", {
     className: "relative"
@@ -1301,13 +1324,17 @@ function TabSaldos({
     const ce = colEstado[r.estado] || colEstado.corriente;
     return /*#__PURE__*/React.createElement("tr", {
       key: r.id,
-      className: "border-t border-gray-100 hover:bg-blue-50/20 transition-colors"
+      className: 'border-t border-gray-100 transition-colors ' + (r.estado === 'mora_grave' ? 'bg-red-50/40 hover:bg-red-50/60' : 'hover:bg-blue-50/20')
     }, /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 font-semibold",
       style: {
         color: '#0B2545'
       }
-    }, r.codigo), /*#__PURE__*/React.createElement("td", {
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "flex items-center gap-1.5"
+    }, r.codigo, r.estado === 'mora_grave' && /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px] bg-red-700 text-white px-1.5 py-0.5 rounded-full font-bold"
+    }, "MORA"))), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-right",
       style: {
         color: '#A6273A'
@@ -1384,6 +1411,236 @@ function TabSaldos({
     }
   }, ajusteSaving ? 'Guardando...' : 'Registrar ajuste'))));
 }
+
+/* MODAL CONCILIACION BANCARIA */
+function ModalConciliacion({
+  unidades,
+  onClose,
+  onImportar,
+  syncing
+}) {
+  const [movimientos, setMovimientos] = useState([]);
+  const [asignaciones, setAsignaciones] = useState({});
+  const [err, setErr] = useState('');
+  const [step, setStep] = useState(1); // 1=subir, 2=conciliar
+
+  const detectarLocal = desc => {
+    if (!desc) return '';
+    const d = desc.toUpperCase();
+    // Buscar patrones como "101", "LOCAL 205", "DPTO 312", etc.
+    const match = d.match(/([1-7]\d{2}|PB[23]|P8)/);
+    if (match) {
+      const id = match[1];
+      // Verificar que sea un local v lido
+      const validos = ['PB2', 'PB3', 'P8'];
+      for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) validos.push(p + '' + String(n).padStart(2, '0'));
+      if (validos.includes(id)) return id;
+    }
+    return '';
+  };
+  const leerBanco = async e => {
+    setErr('');
+    setMovimientos([]);
+    setAsignaciones({});
+    const file = e.target.files[0];
+    if (!file) return;
+    await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    const r = new FileReader();
+    r.onload = ev => {
+      try {
+        const wb = window.XLSX.read(ev.target.result, {
+          type: 'array'
+        });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = window.XLSX.utils.sheet_to_json(ws, {
+          header: 1,
+          raw: false
+        });
+        if (data.length < 2) {
+          setErr('El archivo esta vacio o no tiene el formato esperado');
+          return;
+        }
+
+        // Detectar columnas autom ticamente buscando cabeceras comunes
+        const headers = data[0].map(h => String(h || '').toLowerCase());
+        const colFecha = headers.findIndex(h => h.includes('fecha') || h.includes('date'));
+        const colDesc = headers.findIndex(h => h.includes('desc') || h.includes('concepto') || h.includes('referencia') || h.includes('movimiento'));
+        const colAbono = headers.findIndex(h => h.includes('abono') || h.includes('credito') || h.includes('deposito') || h.includes('entrada'));
+        const colCargo = headers.findIndex(h => h.includes('cargo') || h.includes('debito') || h.includes('retiro') || h.includes('salida'));
+        if (colFecha < 0 || colDesc < 0) {
+          setErr('No se encontraron columnas de Fecha y Descripcion. Verifica que el Excel del banco tenga esas columnas.');
+          return;
+        }
+        const movs = [];
+        data.slice(1).forEach((row, i) => {
+          const abono = colAbono >= 0 ? Number(String(row[colAbono] || '0').replace(/[$,\s]/g, '')) : 0;
+          const cargo = colCargo >= 0 ? Number(String(row[colCargo] || '0').replace(/[$,\s]/g, '')) : 0;
+          // Solo importar abonos (depositos)
+          if (abono > 0) {
+            const desc = String(row[colDesc] || '');
+            const localSugerido = detectarLocal(desc);
+            movs.push({
+              id: 'mov-' + i,
+              fecha: String(row[colFecha] || ''),
+              descripcion: desc,
+              monto: abono,
+              localSugerido
+            });
+          }
+        });
+        if (movs.length === 0) {
+          setErr('No se encontraron abonos en el archivo. Verifica que el estado de cuenta tenga depositos.');
+          return;
+        }
+
+        // Pre-asignar los que tienen local detectado
+        const asig = {};
+        movs.forEach(m => {
+          if (m.localSugerido) asig[m.id] = m.localSugerido;
+        });
+        setMovimientos(movs);
+        setAsignaciones(asig);
+        setStep(2);
+      } catch (e2) {
+        setErr('Error al leer el archivo: ' + e2.message);
+      }
+    };
+    r.readAsArrayBuffer(file);
+  };
+  const pendientes = movimientos.filter(m => !asignaciones[m.id]).length;
+  const listos = movimientos.filter(m => asignaciones[m.id]).length;
+  const importarConciliados = () => {
+    const registros = movimientos.filter(m => asignaciones[m.id]).map(m => ({
+      unidadId: asignaciones[m.id],
+      concepto: 'Pago conciliado',
+      monto: m.monto,
+      fecha: excelFecha(m.fecha),
+      folio: 'BANCO-' + m.id,
+      tipoMov: 'abono',
+      estatus: 'pagado',
+      cancelado: false,
+      descripcionBanco: m.descripcion,
+      createdAt: new Date().toISOString()
+    }));
+    onImportar(registros, movimientos.filter(m => !asignaciones[m.id]));
+  };
+  return /*#__PURE__*/React.createElement(Modal, {
+    title: "Conciliacion Bancaria",
+    onClose: onClose,
+    extraWide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-4"
+  }, step === 1 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "p-4 rounded-xl text-sm",
+    style: {
+      background: '#EFF6FF',
+      border: '1px solid #BFDBFE',
+      color: '#1D4ED8'
+    }
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "font-semibold mb-1"
+  }, "Como funciona:"), /*#__PURE__*/React.createElement("ol", {
+    className: "list-decimal pl-4 space-y-1 text-xs"
+  }, /*#__PURE__*/React.createElement("li", null, "Descarga el estado de cuenta de tu banco en formato Excel"), /*#__PURE__*/React.createElement("li", null, "Subelo aqui - el sistema detecta automaticamente los abonos"), /*#__PURE__*/React.createElement("li", null, "Confirma a que local corresponde cada pago"), /*#__PURE__*/React.createElement("li", null, "Importa solo los conciliados - los pendientes se guardan para despues"))), /*#__PURE__*/React.createElement(Lbl, {
+    text: "Seleccionar estado de cuenta bancario (.xlsx)"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".xlsx,.xls,.csv",
+    onChange: leerBanco,
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+  })), err && /*#__PURE__*/React.createElement("div", {
+    className: "p-3 rounded-lg text-xs text-red-700 bg-red-50 border border-red-200"
+  }, err)), step === 2 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3 rounded-xl",
+    style: {
+      background: '#F0FDF4',
+      border: '1px solid #BBF7D0'
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "text-sm"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "font-bold text-green-700"
+  }, listos, " listos"), /*#__PURE__*/React.createElement("span", {
+    className: "text-gray-500 mx-2"
+  }, "|"), /*#__PURE__*/React.createElement("span", {
+    className: "font-medium text-orange-600"
+  }, pendientes, " sin asignar")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      setStep(1);
+      setMovimientos([]);
+      setAsignaciones({});
+    },
+    className: "text-xs text-gray-500 hover:text-gray-700 underline"
+  }, "Cargar otro archivo")), /*#__PURE__*/React.createElement("div", {
+    className: "border border-gray-200 rounded-xl overflow-hidden"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-gray-50 px-4 py-2 grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2"
+  }, "Fecha"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-5"
+  }, "Descripcion banco"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2 text-right"
+  }, "Monto"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-3"
+  }, "Asignar a local")), /*#__PURE__*/React.createElement("div", {
+    className: "max-h-96 overflow-y-auto divide-y divide-gray-100"
+  }, movimientos.map(m => {
+    const asig = asignaciones[m.id] || '';
+    const isSugerido = m.localSugerido && !asig;
+    return /*#__PURE__*/React.createElement("div", {
+      key: m.id,
+      className: 'px-4 py-2.5 grid grid-cols-12 gap-2 items-center text-sm transition ' + (asig ? 'bg-green-50/30' : 'bg-white hover:bg-gray-50')
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 text-xs text-gray-500"
+    }, m.fecha), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-5 text-xs text-gray-700 truncate",
+      title: m.descripcion
+    }, m.descripcion), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 text-right font-semibold text-green-700"
+    }, "$", Number(m.monto).toLocaleString('es-MX', {
+      minimumFractionDigits: 2
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-3"
+    }, /*#__PURE__*/React.createElement("select", {
+      value: asig,
+      onChange: e => setAsignaciones({
+        ...asignaciones,
+        [m.id]: e.target.value
+      }),
+      className: 'w-full px-2 py-1 border rounded-lg text-xs focus:outline-none ' + (asig ? 'border-green-300 bg-green-50' : 'border-gray-300')
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "Sin asignar..."), m.localSugerido && /*#__PURE__*/React.createElement("option", {
+      value: m.localSugerido
+    }, "\u2713 ", m.localSugerido, " (auto)"), /*#__PURE__*/React.createElement("optgroup", {
+      label: "Locales Especiales"
+    }, unidades.filter(u => u.tipo === 'local').map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.id
+    }, u.codigo))), [1, 2, 3, 4, 5, 6, 7].map(p => /*#__PURE__*/React.createElement("optgroup", {
+      key: p,
+      label: 'Piso ' + p
+    }, unidades.filter(u => u.piso === p).map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.id
+    }, u.codigo)))))));
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: importarConciliados,
+    disabled: syncing || listos === 0,
+    className: "flex-1 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 disabled:opacity-40 flex items-center justify-center gap-2",
+    style: {
+      backgroundColor: '#1B7F5A'
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 15
+  }), "Importando...") : 'Importar ' + listos + ' pagos conciliados'), pendientes > 0 && /*#__PURE__*/React.createElement("button", {
+    onClick: () => onImportar([], movimientos.filter(m => !asignaciones[m.id])),
+    className: "px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 hover:bg-gray-50 text-gray-600 text-xs"
+  }, "Guardar ", pendientes, " pendientes para despues")))));
+}
 function App() {
   const unidades = useMemo(() => generarUnidades(), []);
   const dbRef = useRef(null),
@@ -1403,6 +1660,8 @@ function App() {
   });
   const [mAuth, setMAuth] = useState(false);
   const [mCargos, setMCargos] = useState(false);
+  const [mConciliacion, setMConciliacion] = useState(false);
+  const [pendientesConcil, setPendientesConcil] = useState([]);
   const [cargosMes, setCargosMes] = useState(new Date().getMonth() + 1);
   const [cargosAno, setCargosAno] = useState(new Date().getFullYear());
   const [mReg, setMReg] = useState(false);
@@ -1491,6 +1750,16 @@ function App() {
           });
           setAdminHash(h);
         }
+        // Cargar pendientes de conciliacion guardados
+        try {
+          const snapPend = await db.collection('conciliacion_pendiente').get();
+          if (!snapPend.empty) {
+            setPendientesConcil(snapPend.docs.map(d => ({
+              id: d.id,
+              ...d.data()
+            })));
+          }
+        } catch (e) {}
         setFbReady(true);
       } catch (e) {
         setFbError('No se pudo conectar a Firebase. Revisa firebaseConfig.');
@@ -1535,16 +1804,19 @@ function App() {
       const folioBase = 'MNT-' + ano + mesStr;
       unidades.forEach((u, idx) => {
         const monto = getCuotaFija(u.id);
+        const ultimoDia = new Date(ano, mes, 0).getDate();
+        const fechaVenc = ano + '-' + mesStr + '-' + String(ultimoDia).padStart(2, '0');
         b.set(dbRef.current.collection('pagos').doc(), {
           unidadId: u.id,
           concepto: 'Cuota de Mantenimiento',
           monto: monto,
           fecha: fechaCargo,
-          folio: folioBase + '-' + String(idx + 1).padStart(3, '0'),
+          fechaVencimiento: fechaVenc,
           tipoMov: 'cargo',
           estatus: 'pendiente',
           cancelado: false,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
+          folio: folioBase + '-' + String(idx + 1).padStart(3, '0')
         });
       });
       await b.commit();
@@ -1554,6 +1826,43 @@ function App() {
       showToast('Error: ' + e.message, 'err');
       setSyncing(false);
       return false;
+    }
+  };
+  const importarConciliados = async (registros, pendientes) => {
+    if (!dbRef.current) return;
+    setSyncing(true);
+    try {
+      if (registros.length > 0) {
+        const b = dbRef.current.batch();
+        for (const r of registros) {
+          var reg = {
+            ...r
+          };
+          // Verificar saldo a favor antes de registrar
+          const sf = await calcSaldoFavor(r.unidadId);
+          if (sf > 0) reg.nota = 'Saldo a favor previo: $' + sf.toLocaleString('es-MX');
+          b.set(dbRef.current.collection('pagos').doc(), reg);
+        }
+        await b.commit();
+      }
+      // Guardar pendientes en Firebase para conciliar despues
+      if (pendientes.length > 0) {
+        const b2 = dbRef.current.batch();
+        pendientes.forEach(p => {
+          b2.set(dbRef.current.collection('conciliacion_pendiente').doc(), {
+            ...p,
+            guardadoEn: new Date().toISOString()
+          });
+        });
+        await b2.commit();
+      }
+      showToast(registros.length + ' pagos importados' + (pendientes.length > 0 ? ', ' + pendientes.length + ' guardados para despues' : ''), 'ok');
+      setMConciliacion(false);
+      if (pendientes.length > 0) setPendientesConcil(prev => [...prev, ...pendientes]);
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+    } finally {
+      setSyncing(false);
     }
   };
   const log = async (a, id, d = {}) => {
@@ -1663,6 +1972,15 @@ function App() {
               folio: String(r.Folio || ''),
               tipoMov: tipoMovImp,
               estatus: tipoMovImp === 'abono' ? 'pagado' : 'pendiente',
+              fechaVencimiento: (() => {
+                if (tipoMovImp === 'cargo') {
+                  const fd = excelFecha(r.Fecha);
+                  const d = new Date(fd + 'T00:00:00');
+                  const ult = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+                  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(ult.getDate()).padStart(2, '0');
+                }
+                return null;
+              })(),
               cancelado: false,
               createdAt: new Date().toISOString()
             });
@@ -2749,7 +3067,17 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement(I.Up, {
     sz: 15
-  }), "Importar Excel")), /*#__PURE__*/React.createElement("div", {
+  }), "Importar Excel"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMConciliacion(true),
+    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:shadow-md transition",
+    style: {
+      background: '#0E6BA8'
+    }
+  }, /*#__PURE__*/React.createElement(I.Sheet, {
+    sz: 15
+  }), "Conciliar Banco", pendientesConcil.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bg-orange-400 text-white text-[10px] px-1.5 py-0.5 rounded-full"
+  }, pendientesConcil.length))), /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-5 py-3 border-b border-gray-200"
@@ -2842,11 +3170,29 @@ function App() {
     className: "px-4 py-3 text-gray-600 font-mono text-xs"
   }, p.folio), /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-3 text-center"
-  }, /*#__PURE__*/React.createElement("span", {
-    onClick: () => !p.cancelado && toggleEst(p.id),
-    className: `inline-block px-2.5 py-1 rounded-full text-xs font-semibold transition ${p.estatus === 'pagado' ? 'badge-ok' : 'badge-p'}`,
-    title: p.estatus === 'pendiente' ? 'Click para marcar como pagado' : ''
-  }, p.estatus.toUpperCase())), /*#__PURE__*/React.createElement("td", {
+  }, (() => {
+    const hoy = new Date();
+    const venc = p.estatus === 'pendiente' && p.fechaVencimiento && new Date(p.fechaVencimiento + 'T23:59:59') < hoy;
+    const bg = p.estatus === 'pagado' ? '#D1FAE5' : venc ? '#FEE2E2' : '#FEF3C7';
+    const clr = p.estatus === 'pagado' ? '#1B7F5A' : venc ? '#A6273A' : '#B45309';
+    const lbl = p.estatus === 'pagado' ? 'PAGADO' : venc ? 'VENCIDO' : 'PENDIENTE';
+    return /*#__PURE__*/React.createElement("div", {
+      className: "flex flex-col items-center gap-0.5"
+    }, /*#__PURE__*/React.createElement("span", {
+      onClick: () => !p.cancelado && toggleEst(p.id),
+      className: "inline-block px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer hover:scale-105 transition",
+      style: {
+        backgroundColor: bg,
+        color: clr
+      },
+      title: "Click para cambiar estatus"
+    }, lbl), venc && p.fechaVencimiento && /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px]",
+      style: {
+        color: '#EF4444'
+      }
+    }, "Vencio: ", p.fechaVencimiento));
+  })()), /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-3 text-center"
   }, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-center gap-1.5"
@@ -3216,6 +3562,11 @@ function App() {
     unidades: unidades,
     onClose: () => setMReg(false),
     onSave: guardarPagos,
+    syncing: syncing
+  }), mConciliacion && /*#__PURE__*/React.createElement(ModalConciliacion, {
+    unidades: unidades,
+    onClose: () => setMConciliacion(false),
+    onImportar: importarConciliados,
     syncing: syncing
   }), mCargos && /*#__PURE__*/React.createElement(Modal, {
     title: "Generar Cargos Fijos del Mes",
