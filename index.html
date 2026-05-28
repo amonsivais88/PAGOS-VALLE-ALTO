@@ -1417,24 +1417,61 @@ function ModalConciliacion({
   unidades,
   onClose,
   onImportar,
-  syncing
+  syncing,
+  pendientesGuardados,
+  onLimpiarPendiente
 }) {
   const [movimientos, setMovimientos] = useState([]);
-  const [asignaciones, setAsignaciones] = useState({});
+  const [asignaciones, setAsignaciones] = useState(() => {
+    // Pre-asignar locales sugeridos de pendientes guardados
+    const init = {};
+    if (pendientesGuardados && pendientesGuardados.length > 0) {
+      pendientesGuardados.forEach((m, idx) => {
+        if (m.localSugerido) init[m.id || 'pend-' + idx] = m.localSugerido;
+      });
+    }
+    return init;
+  });
   const [err, setErr] = useState('');
-  const [step, setStep] = useState(1); // 1=subir, 2=conciliar
+  const [step, setStep] = useState(pendientesGuardados && pendientesGuardados.length > 0 ? 'pendientes' : 1); // 1=subir, 2=conciliar, pendientes=ver guardados
 
+  const LOCALES_VALIDOS = (() => {
+    const v = ['PB2', 'PB3', 'P8'];
+    for (var p = 1; p <= 7; p++) for (var n = 1; n <= 12; n++) v.push(p + '' + String(n).padStart(2, '0'));
+    return new Set(v);
+  })();
+
+  // Extrae folio tipo A-XXXX del texto del banco
+  const detectarFolioBanco = desc => {
+    if (!desc) return '';
+    // Patrones: A-1852, A1852, A-1 1830, A1 1830, FA1395, AL1841
+    var m = desc.match(/A[-\s]?1[-\s]?(\d{3,4})/i);
+    if (m) return 'A-1' + m[1];
+    m = desc.match(/FA[-\s]?(\d{3,4})/i);
+    if (m) return 'FA' + m[1];
+    m = desc.match(/AL[-\s]?(\d{3,4})/i);
+    if (m) return 'AL' + m[1];
+    return '';
+  };
   const detectarLocal = desc => {
     if (!desc) return '';
     const d = desc.toUpperCase();
-    // Buscar patrones como "101", "LOCAL 205", "DPTO 312", etc.
-    const match = d.match(/([1-7]\d{2}|PB[23]|P8)/);
-    if (match) {
-      const id = match[1];
-      // Verificar que sea un local v lido
-      const validos = ['PB2', 'PB3', 'P8'];
-      for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) validos.push(p + '' + String(n).padStart(2, '0'));
-      if (validos.includes(id)) return id;
+    // Patron 1: "Local 108", "LOCAL 306", "L-212", "L 405", "L308"
+    var m = d.match(/(?:LOCAL|DPTO|DEPTO|OFICINA|CONSULTORIO|OF|L[-\s]?)[\s-]*([1-7][0-9]{2})/);
+    if (m && LOCALES_VALIDOS.has(m[1])) return m[1];
+    // Patron 2: Numero solo precedido de espacio - "507 mayo", "710 MAYO"
+    m = d.match(/(?:^|\s)([1-7][0-9]{2})(?:\s|$|[^0-9])/);
+    if (m && LOCALES_VALIDOS.has(m[1])) return m[1];
+    // Patron 3: Especiales expl citos
+    if (d.includes('PB2')) return 'PB2';
+    if (d.includes('PB3')) return 'PB3';
+    if (d.includes('PISO 8') || d.match(/P8/)) return 'P8';
+    // Patron 4: numero 3 digitos en cualquier posicion
+    var matches = d.match(/[1-7][0-9]{2}/g);
+    if (matches) {
+      for (var i = 0; i < matches.length; i++) {
+        if (LOCALES_VALIDOS.has(matches[i])) return matches[i];
+      }
     }
     return '';
   };
@@ -1445,8 +1482,8 @@ function ModalConciliacion({
     const file = e.target.files[0];
     if (!file) return;
     await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
-    const r = new FileReader();
-    r.onload = ev => {
+    const r2 = new FileReader();
+    r2.onload = ev => {
       try {
         const wb = window.XLSX.read(ev.target.result, {
           type: 'array'
@@ -1460,40 +1497,65 @@ function ModalConciliacion({
           setErr('El archivo esta vacio o no tiene el formato esperado');
           return;
         }
+        const headers = data[0].map(h => String(h || '').toLowerCase().trim());
 
-        // Detectar columnas autom ticamente buscando cabeceras comunes
-        const headers = data[0].map(h => String(h || '').toLowerCase());
-        const colFecha = headers.findIndex(h => h.includes('fecha') || h.includes('date'));
-        const colDesc = headers.findIndex(h => h.includes('desc') || h.includes('concepto') || h.includes('referencia') || h.includes('movimiento'));
-        const colAbono = headers.findIndex(h => h.includes('abono') || h.includes('credito') || h.includes('deposito') || h.includes('entrada'));
-        const colCargo = headers.findIndex(h => h.includes('cargo') || h.includes('debito') || h.includes('retiro') || h.includes('salida'));
-        if (colFecha < 0 || colDesc < 0) {
-          setErr('No se encontraron columnas de Fecha y Descripcion. Verifica que el Excel del banco tenga esas columnas.');
+        // Detectar columnas - incluir REFERENCIA y DEPOSITO del formato bancario real
+        const colFecha = headers.findIndex(h => h.includes('fecha'));
+        const colRef = headers.findIndex(h => h.includes('referencia'));
+        const colDesc = headers.findIndex(h => h.includes('desc') || h.includes('concepto') || h.includes('movimiento'));
+        const colAbono = headers.findIndex(h => h.includes('deposito') || h.includes('abono') || h.includes('credito') || h.includes('entrada'));
+        const colRetiro = headers.findIndex(h => h.includes('retiro') || h.includes('cargo') || h.includes('debito') || h.includes('salida'));
+        const colFolio = headers.findIndex(h => h.includes('folio'));
+        if (colFecha < 0) {
+          setErr('No se encontro la columna FECHA. Verifica que el Excel del banco tenga esa columna.');
+          return;
+        }
+        if (colAbono < 0) {
+          setErr('No se encontro la columna DEPOSITO o ABONO. Verifica el formato del estado de cuenta.');
           return;
         }
         const movs = [];
         data.slice(1).forEach((row, i) => {
-          const abono = colAbono >= 0 ? Number(String(row[colAbono] || '0').replace(/[$,\s]/g, '')) : 0;
-          const cargo = colCargo >= 0 ? Number(String(row[colCargo] || '0').replace(/[$,\s]/g, '')) : 0;
-          // Solo importar abonos (depositos)
-          if (abono > 0) {
-            const desc = String(row[colDesc] || '');
-            const localSugerido = detectarLocal(desc);
-            movs.push({
-              id: 'mov-' + i,
-              fecha: String(row[colFecha] || ''),
-              descripcion: desc,
-              monto: abono,
-              localSugerido
-            });
-          }
+          const montoAbono = Number(String(row[colAbono] || '0').replace(/[$,\s]/g, ''));
+          if (montoAbono <= 0) return;
+
+          // Construir texto completo para buscar el local
+          // Priorizar el campo Cpto: dentro de REFERENCIA (contiene lo que escribio el pagador)
+          const refStr = colRef >= 0 ? String(row[colRef] || '') : '';
+          const descStr = colDesc >= 0 ? String(row[colDesc] || '') : '';
+          const folioBanco = colFolio >= 0 ? String(row[colFolio] || '') : '';
+
+          // Extraer el concepto (Cpto:) del campo REFERENCIA - es lo m s  til
+          var cpto = '';
+          var cptoMatch = refStr.match(/Cpto:\s*([^C]+?)(?:\s+Cve\.|$)/i);
+          if (cptoMatch) cpto = cptoMatch[1].trim();
+          // Si no hay Cpto, usar toda la referencia
+          if (!cpto) cpto = refStr;
+
+          // Construir texto de display para el usuario (m s legible)
+          var ordenante = '';
+          var ordMatch = refStr.match(/Ordenante:\s*([^\s].*?)(?:\s{2,}|Cta:|$)/i);
+          if (ordMatch) ordenante = ordMatch[1].trim();
+          const textoBusqueda = cpto + ' ' + descStr;
+          const localSugerido = detectarLocal(textoBusqueda);
+          const displayDesc = ordenante ? ordenante + (cpto ? ' - ' + cpto.substring(0, 40) : '') : (cpto || descStr).substring(0, 80);
+          const folioDetectado = detectarFolioBanco(cpto);
+          movs.push({
+            id: 'mov-' + i,
+            fecha: String(row[colFecha] || ''),
+            descripcion: displayDesc,
+            descripcionCompleta: cpto || descStr,
+            ordenante: ordenante,
+            folioBanco: folioBanco,
+            folioDetectado: folioDetectado,
+            monto: montoAbono,
+            localSugerido
+          });
         });
         if (movs.length === 0) {
-          setErr('No se encontraron abonos en el archivo. Verifica que el estado de cuenta tenga depositos.');
+          setErr('No se encontraron depositos en el archivo.');
           return;
         }
-
-        // Pre-asignar los que tienen local detectado
         const asig = {};
         movs.forEach(m => {
           if (m.localSugerido) asig[m.id] = m.localSugerido;
@@ -1505,7 +1567,7 @@ function ModalConciliacion({
         setErr('Error al leer el archivo: ' + e2.message);
       }
     };
-    r.readAsArrayBuffer(file);
+    r2.readAsArrayBuffer(file);
   };
   const pendientes = movimientos.filter(m => !asignaciones[m.id]).length;
   const listos = movimientos.filter(m => asignaciones[m.id]).length;
@@ -1515,11 +1577,12 @@ function ModalConciliacion({
       concepto: 'Pago conciliado',
       monto: m.monto,
       fecha: excelFecha(m.fecha),
-      folio: 'BANCO-' + m.id,
+      folio: m.folioDetectado || 'BANCO-' + m.id,
       tipoMov: 'abono',
       estatus: 'pagado',
       cancelado: false,
       descripcionBanco: m.descripcion,
+      ordenante: m.ordenante || '',
       createdAt: new Date().toISOString()
     }));
     onImportar(registros, movimientos.filter(m => !asignaciones[m.id]));
@@ -1550,7 +1613,126 @@ function ModalConciliacion({
     className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
   })), err && /*#__PURE__*/React.createElement("div", {
     className: "p-3 rounded-lg text-xs text-red-700 bg-red-50 border border-red-200"
-  }, err)), step === 2 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, err)), step === 'pendientes' && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "flex items-center justify-between p-3 rounded-xl mb-3",
+    style: {
+      background: '#FFF7ED',
+      border: '1px solid #FED7AA'
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm font-bold text-orange-700"
+  }, pendientesGuardados.length, " movimientos pendientes de conciliar"), /*#__PURE__*/React.createElement("p", {
+    className: "text-xs text-orange-600"
+  }, "Asigna el local a cada movimiento y confirma para importarlos.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setStep(1),
+    className: "text-xs text-blue-600 underline hover:text-blue-800"
+  }, "+ Subir nuevo estado de cuenta")), /*#__PURE__*/React.createElement("div", {
+    className: "border border-gray-200 rounded-xl overflow-hidden mb-3"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bg-gray-50 px-4 py-2 grid grid-cols-12 gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2"
+  }, "Fecha"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-4"
+  }, "Descripcion"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-2 text-right"
+  }, "Monto"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-3"
+  }, "Asignar a local"), /*#__PURE__*/React.createElement("div", {
+    className: "col-span-1"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "max-h-96 overflow-y-auto divide-y divide-gray-100"
+  }, (pendientesGuardados || []).map((m, idx) => {
+    const asig = asignaciones[m.id || 'pend-' + idx] || '';
+    return /*#__PURE__*/React.createElement("div", {
+      key: m.id || idx,
+      className: 'px-4 py-2.5 grid grid-cols-12 gap-2 items-center text-sm transition ' + (asig ? 'bg-green-50/30' : 'bg-white hover:bg-gray-50')
+    }, /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 text-xs text-gray-500"
+    }, m.fecha), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-4 text-xs text-gray-700"
+    }, m.ordenante && /*#__PURE__*/React.createElement("div", {
+      className: "font-medium truncate"
+    }, m.ordenante), /*#__PURE__*/React.createElement("div", {
+      className: "text-gray-500 truncate"
+    }, m.descripcionCompleta || m.descripcion || ''), m.folioDetectado && /*#__PURE__*/React.createElement("div", {
+      className: "text-orange-600 font-semibold",
+      style: {
+        fontSize: '10px'
+      }
+    }, "Folio: ", m.folioDetectado), m.localSugerido && /*#__PURE__*/React.createElement("div", {
+      className: "text-blue-600 font-semibold",
+      style: {
+        fontSize: '10px'
+      }
+    }, "Sugerido: ", m.localSugerido)), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-2 text-right font-semibold text-green-700"
+    }, "$", Number(m.monto || 0).toLocaleString('es-MX', {
+      minimumFractionDigits: 2
+    })), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-3"
+    }, /*#__PURE__*/React.createElement("select", {
+      value: asig,
+      onChange: e => setAsignaciones({
+        ...asignaciones,
+        [m.id || 'pend-' + idx]: e.target.value
+      }),
+      className: 'w-full px-2 py-1 border rounded-lg text-xs focus:outline-none ' + (asig ? 'border-green-300 bg-green-50' : 'border-gray-300')
+    }, /*#__PURE__*/React.createElement("option", {
+      value: ""
+    }, "Sin asignar..."), m.localSugerido && /*#__PURE__*/React.createElement("option", {
+      value: m.localSugerido
+    }, "\u2713 ", m.localSugerido, " (auto)"), /*#__PURE__*/React.createElement("optgroup", {
+      label: "Especiales"
+    }, unidades.filter(u => u.tipo === 'local').map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.id
+    }, u.codigo))), [1, 2, 3, 4, 5, 6, 7].map(p => /*#__PURE__*/React.createElement("optgroup", {
+      key: p,
+      label: 'Piso ' + p
+    }, unidades.filter(u => u.piso === p).map(u => /*#__PURE__*/React.createElement("option", {
+      key: u.id,
+      value: u.id
+    }, u.codigo)))))), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-1 flex justify-center"
+    }, /*#__PURE__*/React.createElement("button", {
+      onClick: () => onLimpiarPendiente && onLimpiarPendiente(m.id),
+      className: "p-1 rounded hover:bg-red-50",
+      title: "Descartar"
+    }, /*#__PURE__*/React.createElement(I.X, {
+      sz: 12,
+      st: {
+        color: '#EF4444'
+      }
+    }))));
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "flex gap-2"
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: () => {
+      const regs = (pendientesGuardados || []).filter(m => asignaciones[m.id || 'pend-' + pendientesGuardados.indexOf(m)]).map((m, idx) => ({
+        unidadId: asignaciones[m.id || 'pend-' + idx],
+        concepto: 'Pago conciliado',
+        monto: m.monto,
+        fecha: excelFecha(m.fecha),
+        folio: m.folioDetectado || m.folioBanco || 'BANCO-pend-' + idx,
+        tipoMov: 'abono',
+        estatus: 'pagado',
+        cancelado: false,
+        descripcionBanco: m.descripcion || '',
+        ordenante: m.ordenante || '',
+        createdAt: new Date().toISOString()
+      }));
+      const sinAsig = (pendientesGuardados || []).filter(m => !asignaciones[m.id || 'pend-' + pendientesGuardados.indexOf(m)]);
+      onImportar(regs, sinAsig);
+    },
+    disabled: syncing || !(pendientesGuardados || []).some(m => asignaciones[m.id]),
+    className: "flex-1 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 disabled:opacity-40 flex items-center justify-center gap-2",
+    style: {
+      backgroundColor: '#1B7F5A'
+    }
+  }, syncing ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Spin, {
+    sz: 15
+  }), "Importando...") : 'Importar asignados (' + Object.keys(asignaciones).length + ')'))), step === 2 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "flex items-center justify-between p-3 rounded-xl",
     style: {
       background: '#F0FDF4',
@@ -1587,16 +1769,30 @@ function ModalConciliacion({
     className: "max-h-96 overflow-y-auto divide-y divide-gray-100"
   }, movimientos.map(m => {
     const asig = asignaciones[m.id] || '';
-    const isSugerido = m.localSugerido && !asig;
     return /*#__PURE__*/React.createElement("div", {
       key: m.id,
       className: 'px-4 py-2.5 grid grid-cols-12 gap-2 items-center text-sm transition ' + (asig ? 'bg-green-50/30' : 'bg-white hover:bg-gray-50')
     }, /*#__PURE__*/React.createElement("div", {
-      className: "col-span-2 text-xs text-gray-500"
+      className: "col-span-2 text-xs text-gray-500 whitespace-nowrap"
     }, m.fecha), /*#__PURE__*/React.createElement("div", {
-      className: "col-span-5 text-xs text-gray-700 truncate",
-      title: m.descripcion
-    }, m.descripcion), /*#__PURE__*/React.createElement("div", {
+      className: "col-span-5 text-xs text-gray-700"
+    }, m.ordenante && /*#__PURE__*/React.createElement("div", {
+      className: "font-medium text-gray-800 truncate",
+      title: m.ordenante
+    }, m.ordenante), /*#__PURE__*/React.createElement("div", {
+      className: "text-gray-500 truncate",
+      title: m.descripcionCompleta || m.descripcion
+    }, m.descripcionCompleta || m.descripcion), m.localSugerido && /*#__PURE__*/React.createElement("div", {
+      className: "text-blue-600 font-semibold",
+      style: {
+        fontSize: '10px'
+      }
+    }, "Local: ", m.localSugerido), !m.localSugerido && m.folioDetectado && /*#__PURE__*/React.createElement("div", {
+      className: "text-orange-600 font-semibold",
+      style: {
+        fontSize: '10px'
+      }
+    }, "Folio: ", m.folioDetectado, " - asigna el local")), /*#__PURE__*/React.createElement("div", {
       className: "col-span-2 text-right font-semibold text-green-700"
     }, "$", Number(m.monto).toLocaleString('es-MX', {
       minimumFractionDigits: 2
@@ -1828,35 +2024,76 @@ function App() {
       return false;
     }
   };
+
+  // Aplica un abono sobre los cargos pendientes del local automaticamente
+  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db) => {
+    // Obtener cargos pendientes del local ordenados por fecha
+    const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', '==', 'pendiente').where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
+    if (snap.empty) return 0; // sin pendientes - el abono queda como saldo a favor
+
+    // Ordenar por fecha ascendente (pagar primero los mas antiguos)
+    const cargos = snap.docs.map(d => ({
+      id: d.id,
+      ...d.data()
+    })).sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
+    var montoRestante = montoAbono;
+    var cargosLiquidados = 0;
+    for (var i = 0; i < cargos.length; i++) {
+      if (montoRestante <= 0) break;
+      const cargo = cargos[i];
+      if (montoRestante >= cargo.monto) {
+        // El abono cubre este cargo completo
+        batch.update(db.collection('pagos').doc(cargo.id), {
+          estatus: 'pagado',
+          updatedAt: new Date().toISOString(),
+          nota: 'Liquidado con abono conciliado'
+        });
+        montoRestante -= cargo.monto;
+        cargosLiquidados++;
+      }
+      // Si no alcanza para el cargo completo, no marcar como pagado (pago parcial)
+    }
+    return cargosLiquidados;
+  };
   const importarConciliados = async (registros, pendientes) => {
     if (!dbRef.current) return;
     setSyncing(true);
     try {
+      var totalLiquidados = 0;
       if (registros.length > 0) {
         const b = dbRef.current.batch();
-        for (const r of registros) {
+        for (var ri = 0; ri < registros.length; ri++) {
           var reg = {
-            ...r
+            ...registros[ri]
           };
-          // Verificar saldo a favor antes de registrar
-          const sf = await calcSaldoFavor(r.unidadId);
-          if (sf > 0) reg.nota = 'Saldo a favor previo: $' + sf.toLocaleString('es-MX');
+          // Registrar el abono
           b.set(dbRef.current.collection('pagos').doc(), reg);
         }
         await b.commit();
-      }
-      // Guardar pendientes en Firebase para conciliar despues
-      if (pendientes.length > 0) {
+        // Ahora aplicar los abonos sobre cargos pendientes (batch separado)
         const b2 = dbRef.current.batch();
+        for (var ri2 = 0; ri2 < registros.length; ri2++) {
+          const r = registros[ri2];
+          const liq = await aplicarAbonoSobrePendientes(r.unidadId, r.monto, b2, dbRef.current);
+          totalLiquidados += liq;
+        }
+        await b2.commit();
+      }
+      // Guardar pendientes en Firebase
+      if (pendientes.length > 0) {
+        const b3 = dbRef.current.batch();
         pendientes.forEach(p => {
-          b2.set(dbRef.current.collection('conciliacion_pendiente').doc(), {
+          b3.set(dbRef.current.collection('conciliacion_pendiente').doc(), {
             ...p,
             guardadoEn: new Date().toISOString()
           });
         });
-        await b2.commit();
+        await b3.commit();
       }
-      showToast(registros.length + ' pagos importados' + (pendientes.length > 0 ? ', ' + pendientes.length + ' guardados para despues' : ''), 'ok');
+      var msg = registros.length + ' pagos importados';
+      if (totalLiquidados > 0) msg += ', ' + totalLiquidados + ' cargos liquidados automaticamente';
+      if (pendientes.length > 0) msg += ', ' + pendientes.length + ' guardados para despues';
+      showToast(msg, 'ok');
       setMConciliacion(false);
       if (pendientes.length > 0) setPendientesConcil(prev => [...prev, ...pendientes]);
     } catch (e) {
@@ -1905,6 +2142,7 @@ function App() {
           ...r
         };
         if (r.tipoMov === 'cargo' && r.estatus === 'pendiente') {
+          // Si es cargo, verificar si hay saldo a favor para cubrirlo
           var sf = await calcSaldoFavor(r.unidadId);
           if (sf >= r.monto) {
             reg.estatus = 'pagado';
@@ -1914,7 +2152,20 @@ function App() {
         b.set(dbRef.current.collection('pagos').doc(), reg);
       }
       await b.commit();
-      showToast(rs.length + ' registro(s) guardado(s)', 'ok');
+      // Si hay abonos, aplicarlos sobre cargos pendientes existentes
+      var totalLiq = 0;
+      const abonos = rs.filter(r => r.tipoMov === 'abono');
+      if (abonos.length > 0) {
+        const b2 = dbRef.current.batch();
+        for (var ai = 0; ai < abonos.length; ai++) {
+          const liq = await aplicarAbonoSobrePendientes(abonos[ai].unidadId, abonos[ai].monto, b2, dbRef.current);
+          totalLiq += liq;
+        }
+        await b2.commit();
+      }
+      var msg = rs.length + ' registro(s) guardado(s)';
+      if (totalLiq > 0) msg += '. ' + totalLiq + ' cargo(s) liquidado(s) automaticamente';
+      showToast(msg, 'ok');
       setMReg(false);
     } catch (e) {
       showToast('Error: ' + e.message, 'err');
@@ -3110,14 +3361,14 @@ function App() {
     style: {
       background: C.bg
     }
-  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Concepto', 'Monto', 'Fecha', 'Folio', 'Estatus', 'Acciones'].map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Tipo', 'Concepto', 'Monto', 'Fecha', 'Folio', 'Estatus', 'Acciones'].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
-    className: `px-4 py-3 font-semibold text-xs uppercase tracking-wider ${h === 'Monto' ? 'text-right' : h === 'Estatus' || h === 'Acciones' ? 'text-center' : 'text-left'}`,
+    className: 'px-4 py-3 font-semibold text-xs uppercase tracking-wider ' + (h === 'Monto' ? 'text-right' : h === 'Estatus' || h === 'Tipo' || h === 'Acciones' ? 'text-center' : 'text-left'),
     style: {
       color: C.navy
     }
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, paginados.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-    colSpan: 7,
+    colSpan: 8,
     className: "px-4 py-10 text-center text-gray-400"
   }, "Sin registros")) : paginados.map(p => /*#__PURE__*/React.createElement("tr", {
     key: p.id,
@@ -3567,7 +3818,12 @@ function App() {
     unidades: unidades,
     onClose: () => setMConciliacion(false),
     onImportar: importarConciliados,
-    syncing: syncing
+    syncing: syncing,
+    pendientesGuardados: pendientesConcil,
+    onLimpiarPendiente: async id => {
+      if (dbRef.current) await dbRef.current.collection('conciliacion_pendiente').doc(id).delete();
+      setPendientesConcil(prev => prev.filter(p => p.id !== id));
+    }
   }), mCargos && /*#__PURE__*/React.createElement(Modal, {
     title: "Generar Cargos Fijos del Mes",
     onClose: () => setMCargos(false)
