@@ -1976,12 +1976,11 @@ function App() {
         // Cargar pendientes de conciliacion guardados
         try {
           const snapPend = await db.collection('conciliacion_pendiente').get();
-          if (!snapPend.empty) {
-            setPendientesConcil(snapPend.docs.map(d => ({
+          // Siempre reemplazar, nunca acumular
+          setPendientesConcil(snapPend.empty ? [] : snapPend.docs.map(d => ({
               id: d.id,
               ...d.data()
             })));
-          }
         } catch (e) {}
         setFbReady(true);
       } catch (e) {
@@ -2106,7 +2105,15 @@ function App() {
         }
         await b2.commit();
       }
-      // Guardar pendientes en Firebase
+      // Guardar pendientes en Firebase:
+      // Primero eliminar todos los pendientes anteriores, luego guardar los nuevos
+      // Esto evita duplicados si se importa parcialmente varias veces
+      const snapOld = await dbRef.current.collection('conciliacion_pendiente').get();
+      if (!snapOld.empty) {
+        const bClean = dbRef.current.batch();
+        snapOld.docs.forEach(d => bClean.delete(d.ref));
+        await bClean.commit();
+      }
       if (pendientes.length > 0) {
         const b3 = dbRef.current.batch();
         pendientes.forEach(p => {
@@ -2117,12 +2124,22 @@ function App() {
         });
         await b3.commit();
       }
+      // Eliminar de Firebase los pendientes que ya fueron importados
+      // (los que NO están en el array 'pendientes' pero SÍ estaban guardados)
+      const pendientesIds = new Set((pendientes||[]).map(p => p.id).filter(Boolean));
+      const aEliminar = pendientesConcil.filter(p => p.id && !pendientesIds.has(p.id));
+      if (aEliminar.length > 0) {
+        const bDel = dbRef.current.batch();
+        aEliminar.forEach(p => bDel.delete(dbRef.current.collection('conciliacion_pendiente').doc(p.id)));
+        await bDel.commit();
+      }
       var msg = registros.length + ' pagos importados';
       if (totalLiquidados > 0) msg += ', ' + totalLiquidados + ' cargos liquidados automaticamente';
       if (pendientes.length > 0) msg += ', ' + pendientes.length + ' guardados para despues';
       showToast(msg, 'ok');
       setMConciliacion(false);
-      if (pendientes.length > 0) setPendientesConcil(prev => [...prev, ...pendientes]);
+      // Reemplazar (no acumular) los pendientes en el estado local
+      setPendientesConcil(pendientes.length > 0 ? pendientes : []);
     } catch (e) {
       showToast('Error: ' + e.message, 'err');
     } finally {
