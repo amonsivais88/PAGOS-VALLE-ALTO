@@ -1374,17 +1374,9 @@ function TabSaldos({
         backgroundColor: ce.bg,
         color: ce.color
       }
-    }, ce.label)), esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("button", {
-              onClick: () => {
-                var ajustesLocal = pagos.filter(function(p) {
-                  return !p.cancelado && p.unidadId === r.id && p.estatus === 'a_favor';
-                });
-                if (ajustesLocal.length > 0) eliminarAjuste(ajustesLocal[ajustesLocal.length - 1].id);
-              },
-              className: "ml-2 text-xs text-red-500 hover:text-red-700 underline",
-              title: "Revertir ajuste"
-            }, "Revertir")));
+    }, ce.label), esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("td", {className: "px-4 py-3 text-center"}, /*#__PURE__*/React.createElement("button", {onClick: function() { var aj = pagos.filter(function(p){return !p.cancelado && p.unidadId===r.id && p.estatus==='a_favor';}); if(aj.length>0) eliminarAjuste(aj[aj.length-1].id); }, className: "text-xs text-red-500 hover:text-red-700 underline font-medium", title: "Revertir ajuste a favor"}, "Revertir"))));
   }))))), ajusteLocal && /*#__PURE__*/React.createElement(Modal, {
+
     title: "Registrar Ajuste de Saldo",
     onClose: () => {
       setAjusteLocal(null);
@@ -2519,14 +2511,6 @@ function App() {
     const {
       jsPDF
     } = window.jspdf;
-    const doc = new jsPDF();
-    hdrSimple(doc);
-    doc.setFontSize(11);
-    doc.setTextColor(40, 40, 40);
-    doc.text('ESTADO DE CUENTA', 14, 40);
-    doc.setFontSize(9);
-    doc.text('Periodo: ' + MESES_L[mesD - 1] + ' ' + anoD + ' - ' + MESES_L[mesH - 1] + ' ' + anoH + ' | Saldos: ' + (tipo === 'ambos' ? 'Todos' : tipo), 14, 47);
-    let startY = 53;
     for (var _uidI = 0; _uidI < uids.length; _uidI++) {
     var uid = uids[_uidI];
     var docLocal = new jsPDF();
