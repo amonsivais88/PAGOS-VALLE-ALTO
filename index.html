@@ -1884,6 +1884,10 @@ function App() {
   const [mAuth, setMAuth] = useState(false);
   const [mCargos, setMCargos] = useState(false);
   const [mConciliacion, setMConciliacion] = useState(false);
+  const [mConfPago, setMConfPago] = useState(false);
+  const [confPagoId, setConfPagoId] = useState(null);
+  const [confPagoFecha, setConfPagoFecha] = useState('');
+  const [confPagoMetodo, setConfPagoMetodo] = useState('Transferencia');
   const [pendientesConcil, setPendientesConcil] = useState([]);
   const [cargosMes, setCargosMes] = useState(new Date().getMonth() + 1);
   const [cargosAno, setCargosAno] = useState(new Date().getFullYear());
@@ -2343,17 +2347,17 @@ function App() {
       setSyncing(false);
     }
   };
-  const toggleEst = async id => {
+  const toggleEst = async (id, fechaPago, metodoPago) => {
     const p = pagos.find(x => x.id === id);
     if (!p) return;
     setSyncing(true);
     try {
       const n = p.estatus === 'pagado' ? 'pendiente' : 'pagado';
-      await dbRef.current.collection('pagos').doc(id).update({
-        estatus: n,
-        updatedAt: new Date().toISOString()
-      });
-      showToast(`Marcado: ${n.toUpperCase()}`, 'ok');
+      const updateData = { estatus: n, updatedAt: new Date().toISOString() };
+      if (n === 'pagado' && fechaPago) updateData.fechaPago = fechaPago;
+      if (n === 'pagado' && metodoPago) updateData.metodoPago = metodoPago;
+      await dbRef.current.collection('pagos').doc(id).update(updateData);
+      showToast('Marcado: ' + n.toUpperCase(), 'ok');
     } catch (e) {
       showToast(e.message, 'err');
       setSyncing(false);
@@ -3470,7 +3474,19 @@ function App() {
     return /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col items-center gap-0.5"
     }, /*#__PURE__*/React.createElement("span", {
-      onClick: () => !p.cancelado && toggleEst(p.id),
+      onClick: () => {
+        if (p.cancelado) return;
+        if (p.estatus !== 'pagado') {
+          // Pendiente/Vencido -> abrir modal para confirmar fecha y método
+          setConfPagoId(p.id);
+          setConfPagoFecha(new Date().toISOString().split('T')[0]);
+          setConfPagoMetodo('Transferencia');
+          setMConfPago(true);
+        } else {
+          // Pagado -> revertir directamente sin modal
+          toggleEst(p.id);
+        }
+      },
       className: "inline-block px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer hover:scale-105 transition",
       style: {
         backgroundColor: bg,
@@ -3854,7 +3870,53 @@ function App() {
     onClose: () => setMReg(false),
     onSave: guardarPagos,
     syncing: syncing
-  }), mConciliacion && /*#__PURE__*/React.createElement(ModalConciliacion, {
+  }), mConfPago && /*#__PURE__*/React.createElement(Modal, {
+    title: "Confirmar Pago",
+    onClose: () => setMConfPago(false)
+  }, /*#__PURE__*/React.createElement("div", {className: "space-y-4"},
+    /*#__PURE__*/React.createElement("p", {className: "text-sm text-gray-600"},
+      "Confirma los datos del pago recibido:"),
+    /*#__PURE__*/React.createElement("div", {className: "space-y-3"},
+      /*#__PURE__*/React.createElement("div", null,
+        /*#__PURE__*/React.createElement("label", {className: "block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide"}, "Fecha de pago *"),
+        /*#__PURE__*/React.createElement("input", {
+          type: "date",
+          value: confPagoFecha,
+          onChange: e => setConfPagoFecha(e.target.value),
+          className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+        })
+      ),
+      /*#__PURE__*/React.createElement("div", null,
+        /*#__PURE__*/React.createElement("label", {className: "block text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide"}, "Metodo de pago *"),
+        /*#__PURE__*/React.createElement("div", {className: "grid grid-cols-2 gap-2"},
+          ["Transferencia", "Deposito", "Efectivo", "Cheque"].map(m =>
+            /*#__PURE__*/React.createElement("button", {
+              key: m,
+              type: "button",
+              onClick: () => setConfPagoMetodo(m),
+              className: "py-2 rounded-lg text-sm font-semibold border-2 transition",
+              style: {
+                backgroundColor: confPagoMetodo === m ? '#0B2545' : 'white',
+                color: confPagoMetodo === m ? 'white' : '#4B5563',
+                borderColor: confPagoMetodo === m ? '#0B2545' : '#D1D5DB'
+              }
+            }, m)
+          )
+        )
+      )
+    ),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: async () => {
+        if (!confPagoFecha) { alert('Selecciona la fecha de pago'); return; }
+        await toggleEst(confPagoId, confPagoFecha, confPagoMetodo);
+        setMConfPago(false);
+      },
+      disabled: syncing,
+      className: "w-full py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 disabled:opacity-50",
+      style: {backgroundColor: '#1B7F5A'}
+    }, syncing ? "Guardando..." : "Confirmar Pago - " + confPagoFecha)
+  )),
+  mConciliacion && /*#__PURE__*/React.createElement(ModalConciliacion, {
     unidades: unidades,
     onClose: () => setMConciliacion(false),
     onImportar: importarConciliados,
