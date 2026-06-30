@@ -1425,311 +1425,170 @@ function TabSaldos({
 }
 
 /* MODAL CONCILIACION BANCARIA */
-function ModalConciliacionMovimientos({
-  onClose,
-  pagosExt
-}) {
-  const [archivo, setArchivo] = React.useState(null);
-  const [parseando, setParseando] = React.useState(false);
-  const [datos, setDatos] = React.useState(null);
-  const [tabModal, setTabModal] = React.useState('pagos');
-  const [importando, setImportando] = React.useState(false);
-  const [resultado, setResultado] = React.useState(null);
-  const fileRef = React.useRef();
-  const handleFile = async f => {
-    if (!f) return;
-    setArchivo(f);
-    setParseando(true);
-    setDatos(null);
-    setResultado(null);
-    try {
-      const d = await parsearMovimientosEVA(f);
-      setDatos(d);
-    } catch (err) {
-      alert('Error al leer archivo: ' + err.message);
-    } finally {
-      setParseando(false);
-    }
-  };
-  const fmt = n => '$' + Number(n || 0).toLocaleString('es-MX', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
-  const handleImportar = async () => {
-    if (!datos) return;
-    if (!confirm(`\u00bfConfirmar importaci\u00f3n?\n\nPagos a conciliar: ${datos.pagos.filter(p => p.localValido).length}\nGastos a registrar: ${datos.gastos.length}\n\nLos registros duplicados se omitir\u00e1n autom\u00e1ticamente.`)) return;
-    setImportando(true);
-    try {
-      const res = await importarMovimientosEVA(datos.pagos.filter(p => p.localValido), datos.gastos, pagosExt);
-      setResultado(res);
-      setDatos(null);
-    } catch (err) {
-      alert('Error durante importaci\u00f3n: ' + err.message);
-    } finally {
-      setImportando(false);
-    }
-  };
-  const TAB_COUNTS = datos ? {
-    pagos: datos.pagos.length,
-    terminales: datos.terminales.length,
-    gastos: datos.gastos.length,
-    sinId: datos.sinIdentificar.length
-  } : {};
-  const badge = (n, color = 'bg-gray-200') => n > 0 ? React.createElement('span', {
-    className: `ml-1 ${color} text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold`
-  }, n) : null;
-  return React.createElement('div', {
-    className: 'fixed inset-0 flex items-center justify-center z-50',
-    style: {
-      background: 'rgba(0,0,0,0.5)'
-    }
-  }, React.createElement('div', {
-    className: 'bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col mx-4'
-  },
-  // Header
-  React.createElement('div', {
-    className: 'flex items-center justify-between px-6 py-4 border-b border-gray-200'
-  }, React.createElement('div', {}, React.createElement('h2', {
-    className: 'text-lg font-bold',
-    style: {
-      color: C.navy
-    }
-  }, 'Conciliar Movimientos EVA'), React.createElement('p', {
-    className: 'text-xs text-gray-500 mt-0.5'
-  }, 'Importa el archivo Excel de movimientos bancarios del mes')), React.createElement('button', {
-    onClick: onClose,
-    className: 'text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none'
-  }, '\u00d7')),
-  // Body scroll
-  React.createElement('div', {
-    className: 'flex-1 overflow-y-auto p-6'
-  },
-  // Upload zone
-  !resultado && React.createElement('div', {
-    className: 'border-2 border-dashed border-gray-300 rounded-xl p-8 text-center mb-6 cursor-pointer hover:border-blue-400 transition',
-    onClick: () => fileRef.current?.click(),
-    onDragOver: e => e.preventDefault(),
-    onDrop: e => {
-      e.preventDefault();
-      handleFile(e.dataTransfer.files[0]);
-    }
-  }, React.createElement('input', {
-    ref: fileRef,
-    type: 'file',
-    accept: '.xlsx,.xls',
-    className: 'hidden',
-    onChange: e => handleFile(e.target.files[0])
-  }), React.createElement(I.Sheet, {
-    sz: 32,
-    className: 'mx-auto mb-2 text-blue-400'
-  }), parseando ? React.createElement('p', {
-    className: 'text-sm text-gray-500'
-  }, 'Analizando archivo...') : archivo ? React.createElement('p', {
-    className: 'text-sm font-medium text-green-600'
-  }, '\u2713 ', archivo.name, ' \u2014 clic para cambiar') : React.createElement('div', {}, React.createElement('p', {
-    className: 'text-sm font-medium text-gray-700'
-  }, 'Arrastra el archivo Excel o haz clic para seleccionar'), React.createElement('p', {
-    className: 'text-xs text-gray-400 mt-1'
-  }, 'Formato: columnas FECHA, FOLIO, LOCAL, DESGLOSE, MES DE PAGO, CONCEPTO DE GASTO, TIPO DE GASTO'))),
-  // Resultado de importacion
-  resultado && React.createElement('div', {
-    className: 'space-y-4'
-  }, React.createElement('div', {
-    className: 'bg-green-50 border border-green-200 rounded-xl p-4'
-  }, React.createElement('p', {
-    className: 'font-semibold text-green-700 mb-2'
-  }, '\u2705 Importaci\u00f3n completada'), React.createElement('p', {
-    className: 'text-sm text-green-600'
-  }, `Registros importados: ${resultado.importados.length}`), React.createElement('p', {
-    className: 'text-sm text-orange-500'
-  }, `Omitidos (duplicados): ${resultado.omitidos.length}`), resultado.errores.length > 0 && React.createElement('p', {
-    className: 'text-sm text-red-500'
-  }, `Sin conciliar (revisi\u00f3n manual): ${resultado.errores.length}`)), resultado.errores.length > 0 && React.createElement('div', {
-    className: 'bg-red-50 border border-red-200 rounded-xl p-4'
-  }, React.createElement('p', {
-    className: 'font-semibold text-red-700 mb-2'
-  }, 'Registros que requieren revisi\u00f3n manual:'), React.createElement('div', {
-    className: 'space-y-1 max-h-40 overflow-y-auto'
-  }, resultado.errores.map((e, i) => React.createElement('div', {
-    key: i,
-    className: 'text-xs text-red-600 bg-white rounded p-2 border border-red-100'
-  }, `Local ${e.local} | ${fmt(e.monto)} | ${e.fecha} | ${e.nota || e.motivo}`)))), React.createElement('button', {
-    onClick: () => {
-      setResultado(null);
-      setArchivo(null);
-      setDatos(null);
-    },
-    className: 'w-full py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium'
-  }, 'Importar otro archivo')),
-  // Tabla de revision
-  datos && React.createElement('div', {},
-  // Resumen KPIs
-  React.createElement('div', {
-    className: 'grid grid-cols-4 gap-3 mb-4'
-  }, React.createElement('div', {
-    className: 'bg-blue-50 rounded-xl p-3 text-center'
-  }, React.createElement('p', {
-    className: 'text-xl font-bold text-blue-700'
-  }, TAB_COUNTS.pagos), React.createElement('p', {
-    className: 'text-xs text-blue-500'
-  }, 'Pagos detectados')), React.createElement('div', {
-    className: 'bg-yellow-50 rounded-xl p-3 text-center'
-  }, React.createElement('p', {
-    className: 'text-xl font-bold text-yellow-700'
-  }, TAB_COUNTS.terminales), React.createElement('p', {
-    className: 'text-xs text-yellow-500'
-  }, 'Terminales (manual)')), React.createElement('div', {
-    className: 'bg-purple-50 rounded-xl p-3 text-center'
-  }, React.createElement('p', {
-    className: 'text-xl font-bold text-purple-700'
-  }, TAB_COUNTS.gastos), React.createElement('p', {
-    className: 'text-xs text-purple-500'
-  }, 'Gastos')), React.createElement('div', {
-    className: 'bg-red-50 rounded-xl p-3 text-center'
-  }, React.createElement('p', {
-    className: 'text-xl font-bold text-red-700'
-  }, TAB_COUNTS.sinId), React.createElement('p', {
-    className: 'text-xs text-red-500'
-  }, 'Sin identificar'))),
-  // Tabs
-  React.createElement('div', {
-    className: 'flex gap-1 mb-4 border-b border-gray-200'
-  }, [['pagos', 'Pagos', 'bg-blue-500'], ['terminales', 'Terminales', 'bg-yellow-500'], ['gastos', 'Gastos', 'bg-purple-500'], ['sinId', 'Sin identificar', 'bg-red-500']].map(([key, label, color]) => React.createElement('button', {
-    key,
-    onClick: () => setTabModal(key),
-    className: `px-3 py-2 text-sm font-medium rounded-t-lg transition ${tabModal === key ? 'bg-white border border-b-white border-gray-200 -mb-px text-gray-900' : 'text-gray-500 hover:text-gray-700'}`
-  }, label, badge(TAB_COUNTS[key] || 0, color)))),
-  // Tab: Pagos
-  tabModal === 'pagos' && React.createElement('div', {
-    className: 'overflow-x-auto'
-  }, React.createElement('table', {
-    className: 'w-full text-xs'
-  }, React.createElement('thead', {}, React.createElement('tr', {
-    className: 'bg-gray-50 text-gray-500'
-  }, ['Fila', 'Fecha', 'Local', 'Monto', 'Folio', 'Mes a liquidar', 'Origen'].map(h => React.createElement('th', {
-    key: h,
-    className: 'px-3 py-2 text-left font-medium'
-  }, h)))), React.createElement('tbody', {}, datos.pagos.map((p, i) => React.createElement('tr', {
-    key: i,
-    className: `border-t border-gray-100 ${!p.localValido ? 'bg-red-50' : ''}`
-  }, React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-400'
-  }, p.fila), React.createElement('td', {
-    className: 'px-3 py-1.5'
-  }, p.fecha), React.createElement('td', {
-    className: 'px-3 py-1.5 font-bold',
-    style: {
-      color: p.localValido ? C.navy : '#dc2626'
-    }
-  }, p.local, !p.localValido && React.createElement('span', {
-    className: 'ml-1 text-red-400 font-normal'
-  }, '(no reconocido)')), React.createElement('td', {
-    className: 'px-3 py-1.5 font-medium text-green-700'
-  }, fmt(p.monto)), React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-500'
-  }, p.folio), React.createElement('td', {
-    className: 'px-3 py-1.5'
-  }, p.mesPago ? React.createElement('span', {
-    className: 'bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-medium'
-  }, p.mesPago) : React.createElement('span', {
-    className: 'text-gray-400'
-  }, '\u2014 m\u00e1s antiguo')), React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-400'
-  }, p.origen)))))),
-  // Tab: Terminales
-  tabModal === 'terminales' && React.createElement('div', {}, React.createElement('div', {
-    className: 'bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 text-xs text-yellow-700'
-  }, '\u26a0\ufe0f Estos pagos vienen con monto neto (ya descontada la comisi\u00f3n de terminal). No se conciliar\u00e1n autom\u00e1ticamente. Reg\u00edstralos manualmente con el monto bruto correcto.'), React.createElement('table', {
-    className: 'w-full text-xs'
-  }, React.createElement('thead', {}, React.createElement('tr', {
-    className: 'bg-gray-50 text-gray-500'
-  }, ['Fila', 'Fecha', 'Local (terminal)', 'Monto neto', 'Factura', 'Folio banco'].map(h => React.createElement('th', {
-    key: h,
-    className: 'px-3 py-2 text-left font-medium'
-  }, h)))), React.createElement('tbody', {}, datos.terminales.map((t, i) => React.createElement('tr', {
-    key: i,
-    className: 'border-t border-gray-100'
-  }, React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-400'
-  }, t.fila), React.createElement('td', {
-    className: 'px-3 py-1.5'
-  }, t.fecha), React.createElement('td', {
-    className: 'px-3 py-1.5 font-medium text-yellow-700'
-  }, t.localRaw), React.createElement('td', {
-    className: 'px-3 py-1.5 text-red-500 font-medium'
-  }, fmt(t.deposito)), React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-500'
-  }, t.factura), React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-400 text-[10px]'
-  }, t.folioBanco)))))),
-  // Tab: Gastos
-  tabModal === 'gastos' && React.createElement('div', {
-    className: 'overflow-x-auto'
-  }, React.createElement('table', {
-    className: 'w-full text-xs'
-  }, React.createElement('thead', {}, React.createElement('tr', {
-    className: 'bg-gray-50 text-gray-500'
-  }, ['Fila', 'Fecha', 'Concepto', 'Tipo', 'Monto', 'Folio banco'].map(h => React.createElement('th', {
-    key: h,
-    className: 'px-3 py-2 text-left font-medium'
-  }, h)))), React.createElement('tbody', {}, datos.gastos.map((g, i) => React.createElement('tr', {
-    key: i,
-    className: 'border-t border-gray-100'
-  }, React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-400'
-  }, g.fila), React.createElement('td', {
-    className: 'px-3 py-1.5'
-  }, g.fecha), React.createElement('td', {
-    className: 'px-3 py-1.5 font-medium'
-  }, g.concepto), React.createElement('td', {
-    className: 'px-3 py-1.5'
-  }, React.createElement('span', {
-    className: `px-2 py-0.5 rounded-full text-[10px] font-medium ${g.tipo === 'Extraordinario' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'}`
-  }, g.tipo)), React.createElement('td', {
-    className: 'px-3 py-1.5 font-medium text-red-600'
-  }, fmt(g.monto)), React.createElement('td', {
-    className: 'px-3 py-1.5 text-gray-400 text-[10px]'
-  }, g.folioBanco)))))),
-  // Tab: Sin identificar
-  tabModal === 'sinId' && React.createElement('div', {}, datos.sinIdentificar.length === 0 ? React.createElement('p', {
-    className: 'text-sm text-green-600 text-center py-4'
-  }, '\u2705 No hay registros sin identificar') : React.createElement('div', {
-    className: 'space-y-2'
-  }, datos.sinIdentificar.map((s, i) => React.createElement('div', {
-    key: i,
-    className: 'bg-red-50 border border-red-100 rounded-lg p-3 text-xs'
-  }, React.createElement('div', {
-    className: 'flex justify-between items-start'
-  }, React.createElement('span', {
-    className: 'font-medium text-red-700'
-  }, `Fila ${s.fila} \u2014 ${s.motivo}`), s.deposito && React.createElement('span', {
-    className: 'text-red-600 font-bold'
-  }, fmt(s.deposito))), s.nota && React.createElement('p', {
-    className: 'text-red-500 mt-1'
-  }, s.nota), s.localRaw && React.createElement('p', {
-    className: 'text-gray-500 mt-0.5'
-  }, 'Local: ', s.localRaw), s.fecha && React.createElement('p', {
-    className: 'text-gray-400 mt-0.5'
-  }, 'Fecha: ', s.fecha))))))),
-  // Footer con botn importar
-  datos && !resultado && React.createElement('div', {
-    className: 'px-6 py-4 border-t border-gray-200 flex justify-between items-center'
-  }, React.createElement('p', {
-    className: 'text-xs text-gray-500'
-  }, `${datos.pagos.filter(p => p.localValido).length} pagos v\u00e1lidos \u00b7 ${datos.gastos.length} gastos \u00b7 ${datos.sinIdentificar.length} sin identificar`), React.createElement('div', {
-    className: 'flex gap-2'
-  }, React.createElement('button', {
-    onClick: onClose,
-    className: 'px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium'
-  }, 'Cancelar'), React.createElement('button', {
-    onClick: handleImportar,
-    disabled: importando || datos.pagos.filter(p => p.localValido).length === 0,
-    className: 'px-5 py-2 rounded-lg text-white font-medium text-sm hover:shadow-md transition disabled:opacity-50',
-    style: {
-      background: C.navy
-    }
-  }, importando ? 'Importando...' : `Confirmar e importar`)))));
+function ModalConciliacionMovimientos({ onClose, onLeerArchivo, onImportar, datos, tab, setTab, importando, resultado, setResultado }) {
+  var fmtM = function(n) { return '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); };
+  var RE = React.createElement;
+  var cnt = datos ? {pagos:datos.pagos.length, terminales:datos.terminales.length, gastos:datos.gastos.length, sinId:datos.sinId.length} : {};
+  var badge = function(n,color) { return n>0 ? RE('span',{className:'ml-1 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold',style:{background:color}},n) : null; };
+
+  return RE('div',{className:'fixed inset-0 flex items-center justify-center z-50',style:{background:'rgba(0,0,0,0.55)'}},
+    RE('div',{className:'bg-white rounded-2xl shadow-2xl flex flex-col mx-4',style:{width:'100%',maxWidth:'860px',maxHeight:'90vh'}},
+
+      // Header
+      RE('div',{className:'flex items-center justify-between px-6 py-4 border-b border-gray-200'},
+        RE('div',{},
+          RE('h2',{className:'text-lg font-bold',style:{color:C.navy}},'Conciliar Movimientos EVA'),
+          RE('p',{className:'text-xs text-gray-500 mt-0.5'},'Importa el Excel de movimientos bancarios del mes')
+        ),
+        RE('button',{onClick:onClose,className:'text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none'},'\u00d7')
+      ),
+
+      // Body
+      RE('div',{className:'flex-1 overflow-y-auto p-6'},
+
+        // Zona de carga
+        !resultado && RE('label',{className:'flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl p-8 text-center mb-5 cursor-pointer hover:border-blue-400 transition',style:{}},
+          RE('input',{type:'file',accept:'.xlsx,.xls',className:'hidden',onChange:function(e){if(e.target.files[0]) onLeerArchivo(e.target.files[0]); e.target.value='';}}),
+          RE(I.Sheet,{sz:32,className:'mx-auto mb-2',style:{color:'#60a5fa'}}),
+          RE('p',{className:'text-sm font-medium text-gray-700'},'Arrastra o haz clic para seleccionar el archivo Excel'),
+          RE('p',{className:'text-xs text-gray-400 mt-1'},'Columnas requeridas: FECHA, LOCAL, DESGLOSE, MES DE PAGO, CONCEPTO DE GASTO, TIPO DE GASTO')
+        ),
+
+        // Resultado de importación
+        resultado && RE('div',{className:'space-y-4'},
+          RE('div',{className:'bg-green-50 border border-green-200 rounded-xl p-4'},
+            RE('p',{className:'font-semibold text-green-700 mb-2'},'\u2705 Importaci\u00f3n completada'),
+            RE('p',{className:'text-sm text-green-600'},'Registros importados: '+resultado.importados.length),
+            RE('p',{className:'text-sm text-orange-500'},'Omitidos (duplicados): '+resultado.omitidos.length),
+            resultado.errores.length>0 && RE('p',{className:'text-sm text-red-500'},'Requieren revisi\u00f3n manual: '+resultado.errores.length)
+          ),
+          resultado.errores.length>0 && RE('div',{className:'bg-red-50 border border-red-100 rounded-xl p-4'},
+            RE('p',{className:'font-semibold text-red-700 mb-2'},'Registros sin conciliar (revisi\u00f3n manual):'),
+            RE('div',{className:'space-y-1 max-h-48 overflow-y-auto'},
+              resultado.errores.map(function(e,i){ return RE('div',{key:i,className:'text-xs text-red-600 bg-white rounded p-2 border border-red-100'},
+                'Local '+e.local+' | '+fmtM(e.monto)+' | '+e.fecha+' | '+(e.nota||e.motivo)
+              ); })
+            )
+          ),
+          RE('button',{onClick:function(){setResultado(null);},className:'w-full py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium'},'Importar otro archivo')
+        ),
+
+        // Tabla de revisión
+        datos && !resultado && RE('div',{},
+
+          // KPIs
+          RE('div',{className:'grid grid-cols-4 gap-3 mb-4'},
+            RE('div',{className:'bg-blue-50 rounded-xl p-3 text-center'},RE('p',{className:'text-xl font-bold text-blue-700'},cnt.pagos),RE('p',{className:'text-xs text-blue-500'},'Pagos')),
+            RE('div',{className:'bg-yellow-50 rounded-xl p-3 text-center'},RE('p',{className:'text-xl font-bold text-yellow-700'},cnt.terminales),RE('p',{className:'text-xs text-yellow-500'},'Terminales')),
+            RE('div',{className:'bg-purple-50 rounded-xl p-3 text-center'},RE('p',{className:'text-xl font-bold text-purple-700'},cnt.gastos),RE('p',{className:'text-xs text-purple-500'},'Gastos')),
+            RE('div',{className:'bg-red-50 rounded-xl p-3 text-center'},RE('p',{className:'text-xl font-bold text-red-700'},cnt.sinId),RE('p',{className:'text-xs text-red-500'},'Sin identificar'))
+          ),
+
+          // Tabs
+          RE('div',{className:'flex gap-1 mb-4 border-b border-gray-200'},
+            [['pagos','Pagos','#3b82f6'],['terminales','Terminales','#eab308'],['gastos','Gastos','#a855f7'],['sinId','Sin identificar','#ef4444']].map(function(t){
+              return RE('button',{key:t[0],onClick:function(){setTab(t[0]);},className:'px-3 py-2 text-sm font-medium rounded-t-lg transition '+(tab===t[0]?'bg-white border border-b-white border-gray-200 -mb-px text-gray-900':'text-gray-500 hover:text-gray-700')},
+                t[1], badge(cnt[t[0]]||0,t[2])
+              );
+            })
+          ),
+
+          // Tab Pagos
+          tab==='pagos' && RE('div',{className:'overflow-x-auto'},
+            RE('table',{className:'w-full text-xs'},
+              RE('thead',{},RE('tr',{className:'bg-gray-50 text-gray-500'},
+                ['Fila','Fecha','Local','Monto','Folio','Mes a liquidar','Origen'].map(function(h){return RE('th',{key:h,className:'px-3 py-2 text-left font-medium'},h);})
+              )),
+              RE('tbody',{},datos.pagos.map(function(p,i){
+                return RE('tr',{key:i,className:'border-t border-gray-100'+((!p.localValido)?' bg-red-50':'')},
+                  RE('td',{className:'px-3 py-1.5 text-gray-400'},p.fila),
+                  RE('td',{className:'px-3 py-1.5'},p.fecha),
+                  RE('td',{className:'px-3 py-1.5 font-bold',style:{color:p.localValido?C.navy:'#dc2626'}},p.local,(!p.localValido)&&RE('span',{className:'ml-1 text-red-400 font-normal'},'(no reconocido)')),
+                  RE('td',{className:'px-3 py-1.5 font-medium text-green-700'},fmtM(p.monto)),
+                  RE('td',{className:'px-3 py-1.5 text-gray-500'},p.folio),
+                  RE('td',{className:'px-3 py-1.5'},p.mesPago?RE('span',{className:'bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-medium'},p.mesPago):RE('span',{className:'text-gray-400'},'\u2014 m\u00e1s antiguo')),
+                  RE('td',{className:'px-3 py-1.5 text-gray-400'},p.origen)
+                );
+              }))
+            )
+          ),
+
+          // Tab Terminales
+          tab==='terminales' && RE('div',{},
+            RE('div',{className:'bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 text-xs text-yellow-700'},'\u26a0\ufe0f Pagos con terminal bancaria: el monto es neto (sin comisi\u00f3n). No se conciliar\u00e1n autom\u00e1ticamente. Reg\u00edstralos manualmente con el monto bruto correcto.'),
+            RE('table',{className:'w-full text-xs'},
+              RE('thead',{},RE('tr',{className:'bg-gray-50 text-gray-500'},
+                ['Fila','Fecha','Local (terminal)','Monto neto','Factura','Folio banco'].map(function(h){return RE('th',{key:h,className:'px-3 py-2 text-left font-medium'},h);})
+              )),
+              RE('tbody',{},datos.terminales.map(function(t,i){
+                return RE('tr',{key:i,className:'border-t border-gray-100'},
+                  RE('td',{className:'px-3 py-1.5 text-gray-400'},t.fila),
+                  RE('td',{className:'px-3 py-1.5'},t.fecha),
+                  RE('td',{className:'px-3 py-1.5 font-medium text-yellow-700'},t.localRaw),
+                  RE('td',{className:'px-3 py-1.5 text-red-500 font-medium'},fmtM(t.deposito)),
+                  RE('td',{className:'px-3 py-1.5 text-gray-500'},t.factura),
+                  RE('td',{className:'px-3 py-1.5 text-gray-400 text-[10px]'},t.folioBanco)
+                );
+              }))
+            )
+          ),
+
+          // Tab Gastos
+          tab==='gastos' && RE('div',{className:'overflow-x-auto'},
+            RE('table',{className:'w-full text-xs'},
+              RE('thead',{},RE('tr',{className:'bg-gray-50 text-gray-500'},
+                ['Fila','Fecha','Concepto','Tipo','Monto','Folio banco'].map(function(h){return RE('th',{key:h,className:'px-3 py-2 text-left font-medium'},h);})
+              )),
+              RE('tbody',{},datos.gastos.map(function(g,i){
+                return RE('tr',{key:i,className:'border-t border-gray-100'},
+                  RE('td',{className:'px-3 py-1.5 text-gray-400'},g.fila),
+                  RE('td',{className:'px-3 py-1.5'},g.fecha),
+                  RE('td',{className:'px-3 py-1.5 font-medium'},g.concepto),
+                  RE('td',{className:'px-3 py-1.5'},RE('span',{className:'px-2 py-0.5 rounded-full text-[10px] font-medium '+(g.tipo==='Extraordinario'?'bg-yellow-100 text-yellow-700':'bg-blue-100 text-blue-700')},g.tipo)),
+                  RE('td',{className:'px-3 py-1.5 font-medium text-red-600'},fmtM(g.monto)),
+                  RE('td',{className:'px-3 py-1.5 text-gray-400 text-[10px]'},g.folioBanco)
+                );
+              }))
+            )
+          ),
+
+          // Tab Sin identificar
+          tab==='sinId' && RE('div',{},
+            datos.sinId.length===0
+              ? RE('p',{className:'text-sm text-green-600 text-center py-6'},'\u2705 No hay registros sin identificar')
+              : RE('div',{className:'space-y-2'},datos.sinId.map(function(s,i){
+                  return RE('div',{key:i,className:'bg-red-50 border border-red-100 rounded-lg p-3 text-xs'},
+                    RE('div',{className:'flex justify-between items-start'},
+                      RE('span',{className:'font-medium text-red-700'},'Fila '+s.fila+' \u2014 '+s.motivo),
+                      s.deposito&&RE('span',{className:'text-red-600 font-bold'},fmtM(s.deposito))
+                    ),
+                    s.nota&&RE('p',{className:'text-red-500 mt-1'},s.nota),
+                    s.fecha&&RE('p',{className:'text-gray-400 mt-0.5'},'Fecha: '+s.fecha)
+                  );
+                }))
+          )
+        )
+      ),
+
+      // Footer
+      datos && !resultado && RE('div',{className:'px-6 py-4 border-t border-gray-200 flex justify-between items-center'},
+        RE('p',{className:'text-xs text-gray-500'},
+          datos.pagos.filter(function(p){return p.localValido;}).length+' pagos v\u00e1lidos \u00b7 '+datos.gastos.length+' gastos \u00b7 '+datos.sinId.length+' sin identificar'
+        ),
+        RE('div',{className:'flex gap-2'},
+          RE('button',{onClick:onClose,className:'px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium'},'Cancelar'),
+          RE('button',{
+            onClick:onImportar,
+            disabled:importando||datos.pagos.filter(function(p){return p.localValido;}).length===0,
+            className:'px-5 py-2 rounded-lg text-white font-medium text-sm hover:shadow-md transition disabled:opacity-50',
+            style:{background:C.navy}
+          },importando?'Importando...':'Confirmar e importar')
+        )
+      )
+    )
+  );
 }
+
 
 function ModalConciliacion({
   unidades,
@@ -2170,414 +2029,6 @@ function ModalConciliacion({
     className: "px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 hover:bg-gray-50 text-gray-600 text-xs"
   }, "Guardar ", pendientes, " pendientes para despues")))));
 }
-// === CONCILIACION MOVIMIENTOS EVA (funciones globales) ===
-// === CONCILIACION MOVIMIENTOS EVA ===
-const parsearMovimientosEVA = async file => {
-  await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = e => {
-      try {
-        const wb = window.XLSX.read(e.target.result, {
-          type: 'binary'
-        });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const data = window.XLSX.utils.sheet_to_json(ws, {
-          header: 1,
-          raw: false
-        });
-        if (!data || data.length < 2) {
-          reject(new Error('Archivo vacio'));
-          return;
-        }
-        const headers = data[0].map(h => String(h || '').toLowerCase().trim());
-        const idx = name => headers.findIndex(h => h === name);
-        const colFecha = idx('fecha');
-        const colFolio = idx('folio');
-        const colDeposito = idx('deposito');
-        const colRetiro = idx('retiro');
-        const colFactura = idx('factura');
-        const colLocal = idx('local');
-        const colDesglose = idx('desglose');
-        const colMesPago = idx('mes de pago');
-        const colConceptoGasto = idx('concepto de gasto');
-        const colTipoGasto = idx('tipo de gasto');
-        const LOCALES_VALIDOS = (() => {
-          const v = new Set(['PB2', 'PB3', 'P8']);
-          for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) v.add(`${p}${String(n).padStart(2, '0')}`);
-          return v;
-        })();
-        const normalizarLocal = raw => {
-          if (!raw) return null;
-          const s = String(raw).trim().toUpperCase();
-          if (s === 'PB2' || s === 'PB3') return s;
-          if (s.includes('PISO 8') || s === 'P8') return 'P8';
-          const m = s.match(/^(\d{3})$/);
-          if (m && LOCALES_VALIDOS.has(m[1])) return m[1];
-          return null;
-        };
-        const esTerminal = localRaw => localRaw && String(localRaw).toUpperCase().includes('TERMINAL');
-        const parseDesglose = texto => {
-          if (!texto) return [];
-          const lineas = String(texto).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-          const out = [];
-          lineas.forEach(linea => {
-            let m = linea.match(/^(\w+)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*(.+)$/);
-            if (m) {
-              out.push({
-                local: m[1],
-                monto: Number(m[2].replace(/,/g, '')),
-                folio: m[3].trim()
-              });
-              return;
-            }
-            m = linea.match(/^[AP]([A-Z0-9]+)$/i);
-            if (m) {
-              out.push({
-                local: null,
-                monto: null,
-                folio: linea
-              });
-            }
-          });
-          return out;
-        };
-        const pagos = [],
-          terminales = [],
-          gastos = [],
-          sinIdentificar = [];
-        data.slice(1).forEach((row, i) => {
-          const fecha = row[colFecha];
-          const referencia0 = row[4]; // col REFERENCIA
-          if (!fecha || String(referencia0 || '').trim().toUpperCase() === 'TOTAL') return;
-          const deposito = Number(String(row[colDeposito] || '0').replace(/[$,\s]/g, '')) || 0;
-          const retiro = Number(String(row[colRetiro] || '0').replace(/[$,\s]/g, '')) || 0;
-          const factura = row[colFactura];
-          const localRaw = row[colLocal];
-          const desglose = row[colDesglose];
-          const mesPago = row[colMesPago];
-          const conceptoGasto = row[colConceptoGasto];
-          const tipoGasto = row[colTipoGasto];
-          const folioBanco = row[colFolio];
-
-          // GASTO (retiro con concepto)
-          if (retiro > 0 && conceptoGasto) {
-            gastos.push({
-              fila: i + 2,
-              fecha,
-              concepto: String(conceptoGasto),
-              tipo: tipoGasto ? String(tipoGasto) : 'Operativo',
-              monto: retiro,
-              folioBanco: folioBanco || ''
-            });
-            return;
-          }
-          if (deposito <= 0) return;
-
-          // TERMINAL: excluir
-          if (esTerminal(localRaw)) {
-            terminales.push({
-              fila: i + 2,
-              fecha,
-              localRaw: String(localRaw),
-              deposito,
-              factura: factura ? String(factura) : '',
-              folioBanco: folioBanco || ''
-            });
-            return;
-          }
-
-          // DESGLOSE multi-local
-          if (desglose) {
-            const lineas = parseDesglose(desglose);
-            if (lineas.length === 0) {
-              sinIdentificar.push({
-                fila: i + 2,
-                motivo: 'desglose no parseable',
-                desglose,
-                fecha
-              });
-              return;
-            }
-            let sumaLineas = 0;
-            let huboCompleto = false;
-            lineas.forEach(l => {
-              if (l.local) {
-                huboCompleto = true;
-                sumaLineas += l.monto;
-                const localNorm = normalizarLocal(l.local);
-                pagos.push({
-                  fila: i + 2,
-                  fecha,
-                  local: localNorm || l.local,
-                  localValido: !!localNorm,
-                  monto: l.monto,
-                  folio: l.folio,
-                  mesPago: mesPago ? String(mesPago) : null,
-                  origen: 'desglose-completo'
-                });
-              } else {
-                sumaLineas += deposito;
-                const localNorm = normalizarLocal(localRaw);
-                pagos.push({
-                  fila: i + 2,
-                  fecha,
-                  local: localNorm || String(localRaw || ''),
-                  localValido: !!localNorm,
-                  monto: deposito,
-                  folio: l.folio,
-                  mesPago: mesPago ? String(mesPago) : null,
-                  origen: 'desglose-simple'
-                });
-              }
-            });
-            if (huboCompleto) {
-              const diff = Math.round((deposito - sumaLineas) * 100) / 100;
-              if (Math.abs(diff) > 0.5) {
-                const tipo = diff > 0 ? 'sobrante' : 'faltante';
-                sinIdentificar.push({
-                  fila: i + 2,
-                  fecha,
-                  motivo: 'descuadre desglose vs deposito',
-                  deposito,
-                  sumaLineasDesglose: sumaLineas,
-                  diferencia: Math.abs(diff),
-                  tipo,
-                  nota: `Dep\u00f3sito fila ${i + 2} es $${deposito.toLocaleString('es-MX')} pero desglose suma $${sumaLineas.toLocaleString('es-MX')} (${tipo} de $${Math.abs(diff).toLocaleString('es-MX')} sin asignar)`
-                });
-              }
-            }
-            return;
-          }
-
-          // LOCAL directo (sin desglose)
-          if (!localRaw) {
-            sinIdentificar.push({
-              fila: i + 2,
-              motivo: 'sin local',
-              fecha,
-              deposito,
-              factura: factura ? String(factura) : ''
-            });
-            return;
-          }
-          const localesStr = String(localRaw).split(',').map(x => x.trim()).filter(Boolean);
-          if (localesStr.length === 1) {
-            const localNorm = normalizarLocal(localesStr[0]);
-            pagos.push({
-              fila: i + 2,
-              fecha,
-              local: localNorm || localesStr[0],
-              localValido: !!localNorm,
-              monto: deposito,
-              folio: factura ? String(factura) : '',
-              mesPago: mesPago ? String(mesPago) : null,
-              origen: 'directo'
-            });
-          } else {
-            sinIdentificar.push({
-              fila: i + 2,
-              motivo: 'm\u00faltiples locales sin desglose',
-              localRaw: String(localRaw),
-              deposito,
-              fecha
-            });
-          }
-        });
-        resolve({
-          pagos,
-          terminales,
-          gastos,
-          sinIdentificar
-        });
-      } catch (err) {
-        reject(err);
-      }
-    };
-    reader.onerror = reject;
-    reader.readAsBinaryString(file);
-  });
-};
-
-// --- BLOQUE B-2: importar movimientos conciliados a Firebase ---
-const importarMovimientosEVA = async (pagosAprobados, gastosAprobados, todosLosPagos) => {
-  const db = dbRef.current;
-  const MESES_L_LOCAL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-  const mesNombreANum = nombre => {
-    if (!nombre) return null;
-    const i = MESES_L_LOCAL.findIndex(m => m.toLowerCase() === String(nombre).trim().toLowerCase());
-    return i >= 0 ? i + 1 : null;
-  };
-
-  // Convertir fecha DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD
-  const normFecha = f => {
-    if (!f) return '';
-    const s = String(f).trim();
-    const m1 = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-    if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
-    const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-    if (m2) return s;
-    return s;
-  };
-
-  // Cargar todos los pagos existentes (para anti-duplicado y busqueda de cargos)
-  const snapPagos = await db.collection('pagos').get();
-  const pagosExistentes = snapPagos.docs.map(d => ({
-    id: d.id,
-    ...d.data()
-  }));
-  const existeDuplicado = (unidadId, monto, fechaDeposito) => {
-    const fd = normFecha(fechaDeposito);
-    return pagosExistentes.some(p => p.unidadId === unidadId && Math.abs(Number(p.monto) - Number(monto)) < 0.01 && p.fechaPago === fd && !p.cancelado);
-  };
-  const buscarCargo = (unidadId, mesPagoNombre, anoRef) => {
-    const candidatos = pagosExistentes.filter(c => c.unidadId === unidadId && c.estatus === 'pendiente' && c.tipoMov === 'cargo' && !c.cancelado);
-    if (candidatos.length === 0) return {
-      cargo: null,
-      motivo: 'sin-pendientes'
-    };
-    const mesNum = mesNombreANum(mesPagoNombre);
-    if (mesNum) {
-      const match = candidatos.find(c => {
-        const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
-        if (d.getMonth() + 1 !== mesNum) return false;
-        if (anoRef && d.getFullYear() !== anoRef) return false;
-        return true;
-      }) || candidatos.find(c => {
-        const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
-        return d.getMonth() + 1 === mesNum;
-      });
-      if (match) return {
-        cargo: match,
-        motivo: 'ok'
-      };
-      return {
-        cargo: null,
-        motivo: 'sin-cargo-para-mes',
-        nota: `No existe cargo pendiente de ${mesPagoNombre} para local ${unidadId}`
-      };
-    }
-    candidatos.sort((a, b) => String(a.fecha || a.fechaVencimiento || '').localeCompare(String(b.fecha || b.fechaVencimiento || '')));
-    return {
-      cargo: candidatos[0],
-      motivo: 'ok'
-    };
-  };
-  const importados = [],
-    omitidos = [],
-    errores = [];
-  const BATCH_SIZE = 400;
-  let ops = [];
-  const flush = async () => {
-    if (ops.length === 0) return;
-    const b = db.batch();
-    ops.forEach(fn => fn(b));
-    await b.commit();
-    ops = [];
-  };
-
-  // Gastos
-  const snapGastos = await db.collection('gastos').get();
-  const gastosExistentes = snapGastos.docs.map(d => ({
-    id: d.id,
-    ...d.data()
-  }));
-  for (const g of gastosAprobados) {
-    const fd = normFecha(g.fecha);
-    const dupGasto = gastosExistentes.some(ge => ge.concepto === g.concepto && Math.abs(Number(ge.monto) - Number(g.monto)) < 0.01 && ge.fecha === fd);
-    if (dupGasto) {
-      omitidos.push({
-        tipo: 'gasto',
-        concepto: g.concepto,
-        monto: g.monto,
-        motivo: 'duplicado'
-      });
-      continue;
-    }
-    const ref = db.collection('gastos').doc();
-    ops.push(b => b.set(ref, {
-      concepto: g.concepto,
-      tipo: g.tipo,
-      monto: g.monto,
-      fecha: fd,
-      descripcion: `Folio banco: ${g.folioBanco || '-'}`,
-      folioBanco: g.folioBanco || '',
-      creadoEn: new Date().toISOString()
-    }));
-    importados.push({
-      tipo: 'gasto',
-      concepto: g.concepto,
-      monto: g.monto
-    });
-    if (ops.length >= BATCH_SIZE) await flush();
-  }
-
-  // Pagos
-  for (const p of pagosAprobados) {
-    const fd = normFecha(p.fecha);
-    // Anti-duplicado
-    if (existeDuplicado(p.local, p.monto, fd)) {
-      omitidos.push({
-        tipo: 'pago',
-        local: p.local,
-        monto: p.monto,
-        fecha: fd,
-        motivo: 'duplicado'
-      });
-      continue;
-    }
-
-    // Extraer ano del deposito para matching
-    const anoDeposito = (() => {
-      const m = fd.match(/^(\d{4})/);
-      return m ? parseInt(m[1]) : null;
-    })();
-    const {
-      cargo,
-      motivo,
-      nota
-    } = buscarCargo(p.local, p.mesPago, anoDeposito);
-    if (!cargo) {
-      errores.push({
-        tipo: 'pago',
-        local: p.local,
-        monto: p.monto,
-        fecha: fd,
-        motivo,
-        nota
-      });
-      continue;
-    }
-
-    // Liquidar el cargo: estatus=pagado, fechaPago=fecha deposito, nota=folio
-    const notaFinal = `Folio: ${p.folio || '-'} | Conciliado: ${new Date().toLocaleDateString('es-MX')}`;
-    const cargoRef = db.collection('pagos').doc(cargo.id);
-    ops.push(b => b.update(cargoRef, {
-      estatus: 'pagado',
-      fechaPago: fd,
-      metodoPago: 'Transferencia',
-      nota: notaFinal
-    }));
-    // Actualizar copia local para evitar doble-match dentro del mismo lote
-    cargo.estatus = 'pagado';
-    importados.push({
-      tipo: 'pago',
-      local: p.local,
-      monto: p.monto,
-      fecha: fd,
-      mes: p.mesPago
-    });
-    if (ops.length >= BATCH_SIZE) await flush();
-  }
-  await flush();
-  return {
-    importados,
-    omitidos,
-    errores
-  };
-};
-
-
 function App() {
   const unidades = useMemo(() => generarUnidades(), []);
   const dbRef = useRef(null),
@@ -2599,6 +2050,10 @@ function App() {
   const [mCargos, setMCargos] = useState(false);
   const [mConciliacion, setMConciliacion] = useState(false);
   const [mConcilMov, setMConcilMov] = useState(false);
+  const [cmTab, setCmTab] = useState('pagos');
+  const [cmDatos, setCmDatos] = useState(null);
+  const [cmImportando, setCmImportando] = useState(false);
+  const [cmResultado, setCmResultado] = useState(null);
   const [mConfPago, setMConfPago] = useState(false);
   const [confPagoId, setConfPagoId] = useState(null);
   const [confPagoFecha, setConfPagoFecha] = useState('');
@@ -2726,6 +2181,170 @@ function App() {
   }, [tab]);
   useEffect(() => setPg(1), [fMes, fAno, fLocal, fEst, fConc, fBusq, sortDir, filtroP]);
   useEffect(() => setGPg(1), [gMes, gAno]);
+
+  // === CONCILIACION MOVIMIENTOS EVA ===
+  // ============================================================
+  // BLOQUE A — estado (va junto a const [mConciliacion,...])
+  // ============================================================
+  // const [mConcilMov, setMConcilMov] = useState(false);
+  // const [cmTab, setCmTab] = useState('pagos');
+  // const [cmDatos, setCmDatos] = useState(null);
+  // const [cmImportando, setCmImportando] = useState(false);
+  // const [cmResultado, setCmResultado] = useState(null);
+
+  // ============================================================
+  // BLOQUE B — función leerMovimientosEVA (va en /* ACCIONES */)
+  // ============================================================
+  const leerMovimientosEVA = async file => {
+    await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        try {
+          const wb = window.XLSX.read(ev.target.result, { type: 'array' });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const data = window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: false });
+          if (!data || data.length < 2) { reject(new Error('Archivo vacio')); return; }
+          const headers = data[0].map(h => String(h || '').toLowerCase().trim());
+          const idx = n => headers.findIndex(h => h === n);
+          const colFecha = idx('fecha'); const colFolio = idx('folio');
+          const colDep = idx('deposito'); const colRet = idx('retiro');
+          const colFact = idx('factura'); const colLocal = idx('local');
+          const colDesg = idx('desglose'); const colMes = idx('mes de pago');
+          const colCG = idx('concepto de gasto'); const colTG = idx('tipo de gasto');
+          const LOCV = new Set(['PB2','PB3','P8']);
+          for (var p=1;p<=7;p++) for (var n=1;n<=12;n++) LOCV.add(p+''+String(n).padStart(2,'0'));
+          const normLoc = raw => {
+            if (!raw) return null;
+            const s = String(raw).trim().toUpperCase();
+            if (s==='PB2'||s==='PB3') return s;
+            if (s.includes('PISO 8')||s==='P8') return 'P8';
+            const m = s.match(/^(\d{3})$/);
+            return (m && LOCV.has(m[1])) ? m[1] : null;
+          };
+          const esTerminal = raw => raw && String(raw).toUpperCase().includes('TERMINAL');
+          const parseDesg = texto => {
+            if (!texto) return [];
+            return String(texto).split(/\r?\n/).map(l=>l.trim()).filter(Boolean).reduce((acc,linea)=>{
+              var m = linea.match(/^(\w+)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*(.+)$/);
+              if (m) { acc.push({local:m[1], monto:Number(m[2].replace(/,/g,'')), folio:m[3].trim()}); return acc; }
+              m = linea.match(/^[AP]([A-Z0-9]+)$/i);
+              if (m) { acc.push({local:null, monto:null, folio:linea}); }
+              return acc;
+            }, []);
+          };
+          const pagos=[], terminales=[], gastos=[], sinId=[];
+          data.slice(1).forEach((row,i) => {
+            const fecha = row[colFecha];
+            if (!fecha || String(row[4]||'').trim().toUpperCase()==='TOTAL') return;
+            const dep = Number(String(row[colDep]||'0').replace(/[$,\s]/g,''))||0;
+            const ret = Number(String(row[colRet]||'0').replace(/[$,\s]/g,''))||0;
+            const localRaw = row[colLocal]; const desglose = row[colDesg];
+            const mesPago = row[colMes] ? String(row[colMes]) : null;
+            const folioBanco = row[colFolio]||'';
+            const factura = row[colFact]||'';
+            const cg = row[colCG]; const tg = row[colTG];
+            if (ret>0 && cg) {
+              gastos.push({fila:i+2,fecha,concepto:String(cg),tipo:tg?String(tg):'Operativo',monto:ret,folioBanco:String(folioBanco)});
+              return;
+            }
+            if (dep<=0) return;
+            if (esTerminal(localRaw)) {
+              terminales.push({fila:i+2,fecha,localRaw:String(localRaw),deposito:dep,factura:String(factura),folioBanco:String(folioBanco)});
+              return;
+            }
+            if (desglose) {
+              const lineas = parseDesg(desglose);
+              if (lineas.length===0) { sinId.push({fila:i+2,fecha,motivo:'desglose no parseable',desglose}); return; }
+              var sumaL=0, huboCompleto=false;
+              lineas.forEach(l => {
+                if (l.local) {
+                  huboCompleto=true; sumaL+=l.monto;
+                  const ln = normLoc(l.local);
+                  pagos.push({fila:i+2,fecha,local:ln||l.local,localValido:!!ln,monto:l.monto,folio:l.folio,mesPago,origen:'desglose'});
+                } else {
+                  sumaL+=dep;
+                  const ln = normLoc(localRaw);
+                  pagos.push({fila:i+2,fecha,local:ln||String(localRaw||''),localValido:!!ln,monto:dep,folio:l.folio,mesPago,origen:'desglose'});
+                }
+              });
+              if (huboCompleto) {
+                var diff = Math.round((dep-sumaL)*100)/100;
+                if (Math.abs(diff)>0.5) {
+                  var tipo = diff>0?'sobrante':'faltante';
+                  sinId.push({fila:i+2,fecha,motivo:'descuadre desglose vs deposito',deposito:dep,sumaLineas:sumaL,diferencia:Math.abs(diff),tipo,nota:'Deposito fila '+(i+2)+' es $'+dep.toLocaleString('es-MX')+' pero desglose suma $'+sumaL.toLocaleString('es-MX')+' ('+tipo+' de $'+Math.abs(diff).toLocaleString('es-MX')+')'});
+                }
+              }
+              return;
+            }
+            if (!localRaw) { sinId.push({fila:i+2,fecha,motivo:'sin local',deposito:dep}); return; }
+            var locs = String(localRaw).split(',').map(x=>x.trim()).filter(Boolean);
+            if (locs.length===1) {
+              var ln = normLoc(locs[0]);
+              pagos.push({fila:i+2,fecha,local:ln||locs[0],localValido:!!ln,monto:dep,folio:String(factura),mesPago,origen:'directo'});
+            } else {
+              sinId.push({fila:i+2,fecha,motivo:'multiples locales sin desglose',localRaw:String(localRaw),deposito:dep});
+            }
+          });
+          resolve({pagos,terminales,gastos,sinId});
+        } catch(err) { reject(err); }
+      };
+      reader.onerror = reject;
+      reader.readAsArrayBuffer(file);
+    });
+  };
+
+  const importarMovimientosEVA = async (pagosAprobados, gastosAprobados) => {
+    const db = dbRef.current;
+    const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const mesNum = nombre => { if (!nombre) return null; var i=MESES.findIndex(m=>m.toLowerCase()===String(nombre).trim().toLowerCase()); return i>=0?i+1:null; };
+    const normF = f => { if (!f) return ''; var s=String(f).trim(); var m=s.match(/^(\d{2})-(\d{2})-(\d{4})$/); if(m) return m[3]+'-'+m[2]+'-'+m[1]; return s; };
+    const snapP = await db.collection('pagos').get();
+    const existentes = snapP.docs.map(d=>({id:d.id,...d.data()}));
+    const esDup = (uid,monto,fecha) => existentes.some(p=>p.unidadId===uid&&Math.abs(Number(p.monto)-Number(monto))<0.01&&p.fechaPago===fecha&&!p.cancelado);
+    const buscarCargo = (uid,mesPagoNombre,anoRef) => {
+      var candidatos = existentes.filter(c=>c.unidadId===uid&&c.estatus==='pendiente'&&c.tipoMov==='cargo'&&!c.cancelado);
+      if (candidatos.length===0) return {cargo:null,motivo:'sin-pendientes'};
+      var mn = mesNum(mesPagoNombre);
+      if (mn) {
+        var match = candidatos.find(c=>{ var d=new Date((c.fecha||c.fechaVencimiento||'')+'T00:00:00'); return (d.getMonth()+1)===mn&&(!anoRef||d.getFullYear()===anoRef); })
+               || candidatos.find(c=>{ var d=new Date((c.fecha||c.fechaVencimiento||'')+'T00:00:00'); return (d.getMonth()+1)===mn; });
+        if (match) return {cargo:match,motivo:'ok'};
+        return {cargo:null,motivo:'sin-cargo-para-mes',nota:'No existe cargo pendiente de '+mesPagoNombre+' para local '+uid};
+      }
+      candidatos.sort((a,b)=>String(a.fecha||a.fechaVencimiento||'').localeCompare(String(b.fecha||b.fechaVencimiento||'')));
+      return {cargo:candidatos[0],motivo:'ok'};
+    };
+    const importados=[], omitidos=[], errores=[];
+    var ops=[];
+    const flush = async () => { if (!ops.length) return; var b=db.batch(); ops.forEach(fn=>fn(b)); await b.commit(); ops=[]; };
+    const snapG = await db.collection('gastos').get();
+    const gastosEx = snapG.docs.map(d=>({id:d.id,...d.data()}));
+    for (var gi=0;gi<gastosAprobados.length;gi++) {
+      var g=gastosAprobados[gi]; var fd=normF(g.fecha);
+      var dupG=gastosEx.some(ge=>ge.concepto===g.concepto&&Math.abs(Number(ge.monto)-Number(g.monto))<0.01&&ge.fecha===fd);
+      if (dupG) { omitidos.push({tipo:'gasto',concepto:g.concepto,monto:g.monto,motivo:'duplicado'}); continue; }
+      var ref=db.collection('gastos').doc();
+      ops.push(b=>b.set(ref,{concepto:g.concepto,tipo:g.tipo,monto:g.monto,fecha:fd,descripcion:'Folio: '+(g.folioBanco||'-'),folioBanco:g.folioBanco||'',creadoEn:new Date().toISOString()}));
+      importados.push({tipo:'gasto',concepto:g.concepto,monto:g.monto});
+      if (ops.length>=400) await flush();
+    }
+    for (var pi=0;pi<pagosAprobados.length;pi++) {
+      var p=pagosAprobados[pi]; var fd=normF(p.fecha);
+      if (esDup(p.local,p.monto,fd)) { omitidos.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,motivo:'duplicado'}); continue; }
+      var ano=null; var am=fd.match(/^(\d{4})/); if(am) ano=parseInt(am[1]);
+      var res=buscarCargo(p.local,p.mesPago,ano);
+      if (!res.cargo) { errores.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,motivo:res.motivo,nota:res.nota}); continue; }
+      var notaFinal='Folio: '+(p.folio||'-')+' | Conciliado: '+new Date().toLocaleDateString('es-MX');
+      var cRef=db.collection('pagos').doc(res.cargo.id);
+      ops.push(b=>b.update(cRef,{estatus:'pagado',fechaPago:fd,metodoPago:'Transferencia',nota:notaFinal}));
+      res.cargo.estatus='pagado';
+      importados.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd});
+      if (ops.length>=400) await flush();
+    }
+    await flush();
+    return {importados,omitidos,errores};
+  };
 
 
   /* ACCIONES */
@@ -4091,7 +3710,7 @@ function App() {
   }), "Conciliar Banco", pendientesConcil.length > 0 && /*#__PURE__*/React.createElement("span", {
     className: "bg-orange-400 text-white text-[10px] px-1.5 py-0.5 rounded-full"
   }, pendientesConcil.length)), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setMConcilMov(true),
+    onClick: function() { setCmDatos(null); setCmResultado(null); setCmTab('pagos'); setMConcilMov(true); },
     className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:shadow-md transition",
     style: { background: '#6B21A8' }
   }, /*#__PURE__*/React.createElement(I.Sheet, {
@@ -4651,8 +4270,27 @@ function App() {
       setPendientesConcil(prev => prev.filter(p => p.id !== id));
     }
   }), mConcilMov && /*#__PURE__*/React.createElement(ModalConciliacionMovimientos, {
-    onClose: () => setMConcilMov(false),
-    pagosExt: pagos
+    onClose: function() { setMConcilMov(false); },
+    onLeerArchivo: async function(file) {
+      setCmDatos(null); setCmResultado(null);
+      try { var d = await leerMovimientosEVA(file); setCmDatos(d); }
+      catch(err) { alert('Error al leer archivo: ' + err.message); }
+    },
+    onImportar: async function() {
+      if (!cmDatos) return;
+      var validos = cmDatos.pagos.filter(function(p){return p.localValido;});
+      if (!confirm('Confirmar importacion?\n\nPagos: '+validos.length+'\nGastos: '+cmDatos.gastos.length+'\n\nLos duplicados se omitiran automaticamente.')) return;
+      setCmImportando(true);
+      try { var r = await importarMovimientosEVA(validos, cmDatos.gastos); setCmResultado(r); setCmDatos(null); }
+      catch(err) { alert('Error: ' + err.message); }
+      finally { setCmImportando(false); }
+    },
+    datos: cmDatos,
+    tab: cmTab,
+    setTab: setCmTab,
+    importando: cmImportando,
+    resultado: cmResultado,
+    setResultado: setCmResultado
   }), mCargos && /*#__PURE__*/React.createElement(Modal, {
     title: "Generar Cargos Fijos del Mes",
     onClose: () => setMCargos(false)
