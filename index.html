@@ -2170,6 +2170,413 @@ function ModalConciliacion({
     className: "px-4 py-2.5 rounded-lg font-medium text-sm border border-gray-300 hover:bg-gray-50 text-gray-600 text-xs"
   }, "Guardar ", pendientes, " pendientes para despues")))));
 }
+// === CONCILIACION MOVIMIENTOS EVA (funciones globales) ===
+// === CONCILIACION MOVIMIENTOS EVA ===
+const parsearMovimientosEVA = file => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, {
+          type: 'binary'
+        });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const data = XLSX.utils.sheet_to_json(ws, {
+          header: 1,
+          raw: false
+        });
+        if (!data || data.length < 2) {
+          reject(new Error('Archivo vacio'));
+          return;
+        }
+        const headers = data[0].map(h => String(h || '').toLowerCase().trim());
+        const idx = name => headers.findIndex(h => h === name);
+        const colFecha = idx('fecha');
+        const colFolio = idx('folio');
+        const colDeposito = idx('deposito');
+        const colRetiro = idx('retiro');
+        const colFactura = idx('factura');
+        const colLocal = idx('local');
+        const colDesglose = idx('desglose');
+        const colMesPago = idx('mes de pago');
+        const colConceptoGasto = idx('concepto de gasto');
+        const colTipoGasto = idx('tipo de gasto');
+        const LOCALES_VALIDOS = (() => {
+          const v = new Set(['PB2', 'PB3', 'P8']);
+          for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) v.add(`${p}${String(n).padStart(2, '0')}`);
+          return v;
+        })();
+        const normalizarLocal = raw => {
+          if (!raw) return null;
+          const s = String(raw).trim().toUpperCase();
+          if (s === 'PB2' || s === 'PB3') return s;
+          if (s.includes('PISO 8') || s === 'P8') return 'P8';
+          const m = s.match(/^(\d{3})$/);
+          if (m && LOCALES_VALIDOS.has(m[1])) return m[1];
+          return null;
+        };
+        const esTerminal = localRaw => localRaw && String(localRaw).toUpperCase().includes('TERMINAL');
+        const parseDesglose = texto => {
+          if (!texto) return [];
+          const lineas = String(texto).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          const out = [];
+          lineas.forEach(linea => {
+            let m = linea.match(/^(\w+)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*(.+)$/);
+            if (m) {
+              out.push({
+                local: m[1],
+                monto: Number(m[2].replace(/,/g, '')),
+                folio: m[3].trim()
+              });
+              return;
+            }
+            m = linea.match(/^[AP]([A-Z0-9]+)$/i);
+            if (m) {
+              out.push({
+                local: null,
+                monto: null,
+                folio: linea
+              });
+            }
+          });
+          return out;
+        };
+        const pagos = [],
+          terminales = [],
+          gastos = [],
+          sinIdentificar = [];
+        data.slice(1).forEach((row, i) => {
+          const fecha = row[colFecha];
+          const referencia0 = row[4]; // col REFERENCIA
+          if (!fecha || String(referencia0 || '').trim().toUpperCase() === 'TOTAL') return;
+          const deposito = Number(String(row[colDeposito] || '0').replace(/[$,\s]/g, '')) || 0;
+          const retiro = Number(String(row[colRetiro] || '0').replace(/[$,\s]/g, '')) || 0;
+          const factura = row[colFactura];
+          const localRaw = row[colLocal];
+          const desglose = row[colDesglose];
+          const mesPago = row[colMesPago];
+          const conceptoGasto = row[colConceptoGasto];
+          const tipoGasto = row[colTipoGasto];
+          const folioBanco = row[colFolio];
+
+          // GASTO (retiro con concepto)
+          if (retiro > 0 && conceptoGasto) {
+            gastos.push({
+              fila: i + 2,
+              fecha,
+              concepto: String(conceptoGasto),
+              tipo: tipoGasto ? String(tipoGasto) : 'Operativo',
+              monto: retiro,
+              folioBanco: folioBanco || ''
+            });
+            return;
+          }
+          if (deposito <= 0) return;
+
+          // TERMINAL: excluir
+          if (esTerminal(localRaw)) {
+            terminales.push({
+              fila: i + 2,
+              fecha,
+              localRaw: String(localRaw),
+              deposito,
+              factura: factura ? String(factura) : '',
+              folioBanco: folioBanco || ''
+            });
+            return;
+          }
+
+          // DESGLOSE multi-local
+          if (desglose) {
+            const lineas = parseDesglose(desglose);
+            if (lineas.length === 0) {
+              sinIdentificar.push({
+                fila: i + 2,
+                motivo: 'desglose no parseable',
+                desglose,
+                fecha
+              });
+              return;
+            }
+            let sumaLineas = 0;
+            let huboCompleto = false;
+            lineas.forEach(l => {
+              if (l.local) {
+                huboCompleto = true;
+                sumaLineas += l.monto;
+                const localNorm = normalizarLocal(l.local);
+                pagos.push({
+                  fila: i + 2,
+                  fecha,
+                  local: localNorm || l.local,
+                  localValido: !!localNorm,
+                  monto: l.monto,
+                  folio: l.folio,
+                  mesPago: mesPago ? String(mesPago) : null,
+                  origen: 'desglose-completo'
+                });
+              } else {
+                sumaLineas += deposito;
+                const localNorm = normalizarLocal(localRaw);
+                pagos.push({
+                  fila: i + 2,
+                  fecha,
+                  local: localNorm || String(localRaw || ''),
+                  localValido: !!localNorm,
+                  monto: deposito,
+                  folio: l.folio,
+                  mesPago: mesPago ? String(mesPago) : null,
+                  origen: 'desglose-simple'
+                });
+              }
+            });
+            if (huboCompleto) {
+              const diff = Math.round((deposito - sumaLineas) * 100) / 100;
+              if (Math.abs(diff) > 0.5) {
+                const tipo = diff > 0 ? 'sobrante' : 'faltante';
+                sinIdentificar.push({
+                  fila: i + 2,
+                  fecha,
+                  motivo: 'descuadre desglose vs deposito',
+                  deposito,
+                  sumaLineasDesglose: sumaLineas,
+                  diferencia: Math.abs(diff),
+                  tipo,
+                  nota: `Dep\u00f3sito fila ${i + 2} es $${deposito.toLocaleString('es-MX')} pero desglose suma $${sumaLineas.toLocaleString('es-MX')} (${tipo} de $${Math.abs(diff).toLocaleString('es-MX')} sin asignar)`
+                });
+              }
+            }
+            return;
+          }
+
+          // LOCAL directo (sin desglose)
+          if (!localRaw) {
+            sinIdentificar.push({
+              fila: i + 2,
+              motivo: 'sin local',
+              fecha,
+              deposito,
+              factura: factura ? String(factura) : ''
+            });
+            return;
+          }
+          const localesStr = String(localRaw).split(',').map(x => x.trim()).filter(Boolean);
+          if (localesStr.length === 1) {
+            const localNorm = normalizarLocal(localesStr[0]);
+            pagos.push({
+              fila: i + 2,
+              fecha,
+              local: localNorm || localesStr[0],
+              localValido: !!localNorm,
+              monto: deposito,
+              folio: factura ? String(factura) : '',
+              mesPago: mesPago ? String(mesPago) : null,
+              origen: 'directo'
+            });
+          } else {
+            sinIdentificar.push({
+              fila: i + 2,
+              motivo: 'm\u00faltiples locales sin desglose',
+              localRaw: String(localRaw),
+              deposito,
+              fecha
+            });
+          }
+        });
+        resolve({
+          pagos,
+          terminales,
+          gastos,
+          sinIdentificar
+        });
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = reject;
+    reader.readAsBinaryString(file);
+  });
+};
+
+// --- BLOQUE B-2: importar movimientos conciliados a Firebase ---
+const importarMovimientosEVA = async (pagosAprobados, gastosAprobados, todosLosPagos) => {
+  const db = dbRef.current;
+  const MESES_L_LOCAL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+  const mesNombreANum = nombre => {
+    if (!nombre) return null;
+    const i = MESES_L_LOCAL.findIndex(m => m.toLowerCase() === String(nombre).trim().toLowerCase());
+    return i >= 0 ? i + 1 : null;
+  };
+
+  // Convertir fecha DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD
+  const normFecha = f => {
+    if (!f) return '';
+    const s = String(f).trim();
+    const m1 = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+    if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
+    const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m2) return s;
+    return s;
+  };
+
+  // Cargar todos los pagos existentes (para anti-duplicado y busqueda de cargos)
+  const snapPagos = await db.collection('pagos').get();
+  const pagosExistentes = snapPagos.docs.map(d => ({
+    id: d.id,
+    ...d.data()
+  }));
+  const existeDuplicado = (unidadId, monto, fechaDeposito) => {
+    const fd = normFecha(fechaDeposito);
+    return pagosExistentes.some(p => p.unidadId === unidadId && Math.abs(Number(p.monto) - Number(monto)) < 0.01 && p.fechaPago === fd && !p.cancelado);
+  };
+  const buscarCargo = (unidadId, mesPagoNombre, anoRef) => {
+    const candidatos = pagosExistentes.filter(c => c.unidadId === unidadId && c.estatus === 'pendiente' && c.tipoMov === 'cargo' && !c.cancelado);
+    if (candidatos.length === 0) return {
+      cargo: null,
+      motivo: 'sin-pendientes'
+    };
+    const mesNum = mesNombreANum(mesPagoNombre);
+    if (mesNum) {
+      const match = candidatos.find(c => {
+        const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
+        if (d.getMonth() + 1 !== mesNum) return false;
+        if (anoRef && d.getFullYear() !== anoRef) return false;
+        return true;
+      }) || candidatos.find(c => {
+        const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
+        return d.getMonth() + 1 === mesNum;
+      });
+      if (match) return {
+        cargo: match,
+        motivo: 'ok'
+      };
+      return {
+        cargo: null,
+        motivo: 'sin-cargo-para-mes',
+        nota: `No existe cargo pendiente de ${mesPagoNombre} para local ${unidadId}`
+      };
+    }
+    candidatos.sort((a, b) => String(a.fecha || a.fechaVencimiento || '').localeCompare(String(b.fecha || b.fechaVencimiento || '')));
+    return {
+      cargo: candidatos[0],
+      motivo: 'ok'
+    };
+  };
+  const importados = [],
+    omitidos = [],
+    errores = [];
+  const BATCH_SIZE = 400;
+  let ops = [];
+  const flush = async () => {
+    if (ops.length === 0) return;
+    const b = db.batch();
+    ops.forEach(fn => fn(b));
+    await b.commit();
+    ops = [];
+  };
+
+  // Gastos
+  const snapGastos = await db.collection('gastos').get();
+  const gastosExistentes = snapGastos.docs.map(d => ({
+    id: d.id,
+    ...d.data()
+  }));
+  for (const g of gastosAprobados) {
+    const fd = normFecha(g.fecha);
+    const dupGasto = gastosExistentes.some(ge => ge.concepto === g.concepto && Math.abs(Number(ge.monto) - Number(g.monto)) < 0.01 && ge.fecha === fd);
+    if (dupGasto) {
+      omitidos.push({
+        tipo: 'gasto',
+        concepto: g.concepto,
+        monto: g.monto,
+        motivo: 'duplicado'
+      });
+      continue;
+    }
+    const ref = db.collection('gastos').doc();
+    ops.push(b => b.set(ref, {
+      concepto: g.concepto,
+      tipo: g.tipo,
+      monto: g.monto,
+      fecha: fd,
+      descripcion: `Folio banco: ${g.folioBanco || '-'}`,
+      folioBanco: g.folioBanco || '',
+      creadoEn: new Date().toISOString()
+    }));
+    importados.push({
+      tipo: 'gasto',
+      concepto: g.concepto,
+      monto: g.monto
+    });
+    if (ops.length >= BATCH_SIZE) await flush();
+  }
+
+  // Pagos
+  for (const p of pagosAprobados) {
+    const fd = normFecha(p.fecha);
+    // Anti-duplicado
+    if (existeDuplicado(p.local, p.monto, fd)) {
+      omitidos.push({
+        tipo: 'pago',
+        local: p.local,
+        monto: p.monto,
+        fecha: fd,
+        motivo: 'duplicado'
+      });
+      continue;
+    }
+
+    // Extraer ano del deposito para matching
+    const anoDeposito = (() => {
+      const m = fd.match(/^(\d{4})/);
+      return m ? parseInt(m[1]) : null;
+    })();
+    const {
+      cargo,
+      motivo,
+      nota
+    } = buscarCargo(p.local, p.mesPago, anoDeposito);
+    if (!cargo) {
+      errores.push({
+        tipo: 'pago',
+        local: p.local,
+        monto: p.monto,
+        fecha: fd,
+        motivo,
+        nota
+      });
+      continue;
+    }
+
+    // Liquidar el cargo: estatus=pagado, fechaPago=fecha deposito, nota=folio
+    const notaFinal = `Folio: ${p.folio || '-'} | Conciliado: ${new Date().toLocaleDateString('es-MX')}`;
+    const cargoRef = db.collection('pagos').doc(cargo.id);
+    ops.push(b => b.update(cargoRef, {
+      estatus: 'pagado',
+      fechaPago: fd,
+      metodoPago: 'Transferencia',
+      nota: notaFinal
+    }));
+    // Actualizar copia local para evitar doble-match dentro del mismo lote
+    cargo.estatus = 'pagado';
+    importados.push({
+      tipo: 'pago',
+      local: p.local,
+      monto: p.monto,
+      fecha: fd,
+      mes: p.mesPago
+    });
+    if (ops.length >= BATCH_SIZE) await flush();
+  }
+  await flush();
+  return {
+    importados,
+    omitidos,
+    errores
+  };
+};
+
+
 function App() {
   const unidades = useMemo(() => generarUnidades(), []);
   const dbRef = useRef(null),
@@ -2319,410 +2726,6 @@ function App() {
   useEffect(() => setPg(1), [fMes, fAno, fLocal, fEst, fConc, fBusq, sortDir, filtroP]);
   useEffect(() => setGPg(1), [gMes, gAno]);
 
-  // === CONCILIACION MOVIMIENTOS EVA ===
-  const parsearMovimientosEVA = file => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = e => {
-        try {
-          const wb = XLSX.read(e.target.result, {
-            type: 'binary'
-          });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const data = XLSX.utils.sheet_to_json(ws, {
-            header: 1,
-            raw: false
-          });
-          if (!data || data.length < 2) {
-            reject(new Error('Archivo vacio'));
-            return;
-          }
-          const headers = data[0].map(h => String(h || '').toLowerCase().trim());
-          const idx = name => headers.findIndex(h => h === name);
-          const colFecha = idx('fecha');
-          const colFolio = idx('folio');
-          const colDeposito = idx('deposito');
-          const colRetiro = idx('retiro');
-          const colFactura = idx('factura');
-          const colLocal = idx('local');
-          const colDesglose = idx('desglose');
-          const colMesPago = idx('mes de pago');
-          const colConceptoGasto = idx('concepto de gasto');
-          const colTipoGasto = idx('tipo de gasto');
-          const LOCALES_VALIDOS = (() => {
-            const v = new Set(['PB2', 'PB3', 'P8']);
-            for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) v.add(`${p}${String(n).padStart(2, '0')}`);
-            return v;
-          })();
-          const normalizarLocal = raw => {
-            if (!raw) return null;
-            const s = String(raw).trim().toUpperCase();
-            if (s === 'PB2' || s === 'PB3') return s;
-            if (s.includes('PISO 8') || s === 'P8') return 'P8';
-            const m = s.match(/^(\d{3})$/);
-            if (m && LOCALES_VALIDOS.has(m[1])) return m[1];
-            return null;
-          };
-          const esTerminal = localRaw => localRaw && String(localRaw).toUpperCase().includes('TERMINAL');
-          const parseDesglose = texto => {
-            if (!texto) return [];
-            const lineas = String(texto).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-            const out = [];
-            lineas.forEach(linea => {
-              let m = linea.match(/^(\w+)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*(.+)$/);
-              if (m) {
-                out.push({
-                  local: m[1],
-                  monto: Number(m[2].replace(/,/g, '')),
-                  folio: m[3].trim()
-                });
-                return;
-              }
-              m = linea.match(/^[AP]([A-Z0-9]+)$/i);
-              if (m) {
-                out.push({
-                  local: null,
-                  monto: null,
-                  folio: linea
-                });
-              }
-            });
-            return out;
-          };
-          const pagos = [],
-            terminales = [],
-            gastos = [],
-            sinIdentificar = [];
-          data.slice(1).forEach((row, i) => {
-            const fecha = row[colFecha];
-            const referencia0 = row[4]; // col REFERENCIA
-            if (!fecha || String(referencia0 || '').trim().toUpperCase() === 'TOTAL') return;
-            const deposito = Number(String(row[colDeposito] || '0').replace(/[$,\s]/g, '')) || 0;
-            const retiro = Number(String(row[colRetiro] || '0').replace(/[$,\s]/g, '')) || 0;
-            const factura = row[colFactura];
-            const localRaw = row[colLocal];
-            const desglose = row[colDesglose];
-            const mesPago = row[colMesPago];
-            const conceptoGasto = row[colConceptoGasto];
-            const tipoGasto = row[colTipoGasto];
-            const folioBanco = row[colFolio];
-  
-            // GASTO (retiro con concepto)
-            if (retiro > 0 && conceptoGasto) {
-              gastos.push({
-                fila: i + 2,
-                fecha,
-                concepto: String(conceptoGasto),
-                tipo: tipoGasto ? String(tipoGasto) : 'Operativo',
-                monto: retiro,
-                folioBanco: folioBanco || ''
-              });
-              return;
-            }
-            if (deposito <= 0) return;
-  
-            // TERMINAL: excluir
-            if (esTerminal(localRaw)) {
-              terminales.push({
-                fila: i + 2,
-                fecha,
-                localRaw: String(localRaw),
-                deposito,
-                factura: factura ? String(factura) : '',
-                folioBanco: folioBanco || ''
-              });
-              return;
-            }
-  
-            // DESGLOSE multi-local
-            if (desglose) {
-              const lineas = parseDesglose(desglose);
-              if (lineas.length === 0) {
-                sinIdentificar.push({
-                  fila: i + 2,
-                  motivo: 'desglose no parseable',
-                  desglose,
-                  fecha
-                });
-                return;
-              }
-              let sumaLineas = 0;
-              let huboCompleto = false;
-              lineas.forEach(l => {
-                if (l.local) {
-                  huboCompleto = true;
-                  sumaLineas += l.monto;
-                  const localNorm = normalizarLocal(l.local);
-                  pagos.push({
-                    fila: i + 2,
-                    fecha,
-                    local: localNorm || l.local,
-                    localValido: !!localNorm,
-                    monto: l.monto,
-                    folio: l.folio,
-                    mesPago: mesPago ? String(mesPago) : null,
-                    origen: 'desglose-completo'
-                  });
-                } else {
-                  sumaLineas += deposito;
-                  const localNorm = normalizarLocal(localRaw);
-                  pagos.push({
-                    fila: i + 2,
-                    fecha,
-                    local: localNorm || String(localRaw || ''),
-                    localValido: !!localNorm,
-                    monto: deposito,
-                    folio: l.folio,
-                    mesPago: mesPago ? String(mesPago) : null,
-                    origen: 'desglose-simple'
-                  });
-                }
-              });
-              if (huboCompleto) {
-                const diff = Math.round((deposito - sumaLineas) * 100) / 100;
-                if (Math.abs(diff) > 0.5) {
-                  const tipo = diff > 0 ? 'sobrante' : 'faltante';
-                  sinIdentificar.push({
-                    fila: i + 2,
-                    fecha,
-                    motivo: 'descuadre desglose vs deposito',
-                    deposito,
-                    sumaLineasDesglose: sumaLineas,
-                    diferencia: Math.abs(diff),
-                    tipo,
-                    nota: `Dep\u00f3sito fila ${i + 2} es $${deposito.toLocaleString('es-MX')} pero desglose suma $${sumaLineas.toLocaleString('es-MX')} (${tipo} de $${Math.abs(diff).toLocaleString('es-MX')} sin asignar)`
-                  });
-                }
-              }
-              return;
-            }
-  
-            // LOCAL directo (sin desglose)
-            if (!localRaw) {
-              sinIdentificar.push({
-                fila: i + 2,
-                motivo: 'sin local',
-                fecha,
-                deposito,
-                factura: factura ? String(factura) : ''
-              });
-              return;
-            }
-            const localesStr = String(localRaw).split(',').map(x => x.trim()).filter(Boolean);
-            if (localesStr.length === 1) {
-              const localNorm = normalizarLocal(localesStr[0]);
-              pagos.push({
-                fila: i + 2,
-                fecha,
-                local: localNorm || localesStr[0],
-                localValido: !!localNorm,
-                monto: deposito,
-                folio: factura ? String(factura) : '',
-                mesPago: mesPago ? String(mesPago) : null,
-                origen: 'directo'
-              });
-            } else {
-              sinIdentificar.push({
-                fila: i + 2,
-                motivo: 'm\u00faltiples locales sin desglose',
-                localRaw: String(localRaw),
-                deposito,
-                fecha
-              });
-            }
-          });
-          resolve({
-            pagos,
-            terminales,
-            gastos,
-            sinIdentificar
-          });
-        } catch (err) {
-          reject(err);
-        }
-      };
-      reader.onerror = reject;
-      reader.readAsBinaryString(file);
-    });
-  };
-  
-  // --- BLOQUE B-2: importar movimientos conciliados a Firebase ---
-  const importarMovimientosEVA = async (pagosAprobados, gastosAprobados, todosLosPagos) => {
-    const db = dbRef.current;
-    const MESES_L_LOCAL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-    const mesNombreANum = nombre => {
-      if (!nombre) return null;
-      const i = MESES_L_LOCAL.findIndex(m => m.toLowerCase() === String(nombre).trim().toLowerCase());
-      return i >= 0 ? i + 1 : null;
-    };
-  
-    // Convertir fecha DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD
-    const normFecha = f => {
-      if (!f) return '';
-      const s = String(f).trim();
-      const m1 = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-      if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
-      const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (m2) return s;
-      return s;
-    };
-  
-    // Cargar todos los pagos existentes (para anti-duplicado y busqueda de cargos)
-    const snapPagos = await db.collection('pagos').get();
-    const pagosExistentes = snapPagos.docs.map(d => ({
-      id: d.id,
-      ...d.data()
-    }));
-    const existeDuplicado = (unidadId, monto, fechaDeposito) => {
-      const fd = normFecha(fechaDeposito);
-      return pagosExistentes.some(p => p.unidadId === unidadId && Math.abs(Number(p.monto) - Number(monto)) < 0.01 && p.fechaPago === fd && !p.cancelado);
-    };
-    const buscarCargo = (unidadId, mesPagoNombre, anoRef) => {
-      const candidatos = pagosExistentes.filter(c => c.unidadId === unidadId && c.estatus === 'pendiente' && c.tipoMov === 'cargo' && !c.cancelado);
-      if (candidatos.length === 0) return {
-        cargo: null,
-        motivo: 'sin-pendientes'
-      };
-      const mesNum = mesNombreANum(mesPagoNombre);
-      if (mesNum) {
-        const match = candidatos.find(c => {
-          const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
-          if (d.getMonth() + 1 !== mesNum) return false;
-          if (anoRef && d.getFullYear() !== anoRef) return false;
-          return true;
-        }) || candidatos.find(c => {
-          const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
-          return d.getMonth() + 1 === mesNum;
-        });
-        if (match) return {
-          cargo: match,
-          motivo: 'ok'
-        };
-        return {
-          cargo: null,
-          motivo: 'sin-cargo-para-mes',
-          nota: `No existe cargo pendiente de ${mesPagoNombre} para local ${unidadId}`
-        };
-      }
-      candidatos.sort((a, b) => String(a.fecha || a.fechaVencimiento || '').localeCompare(String(b.fecha || b.fechaVencimiento || '')));
-      return {
-        cargo: candidatos[0],
-        motivo: 'ok'
-      };
-    };
-    const importados = [],
-      omitidos = [],
-      errores = [];
-    const BATCH_SIZE = 400;
-    let ops = [];
-    const flush = async () => {
-      if (ops.length === 0) return;
-      const b = db.batch();
-      ops.forEach(fn => fn(b));
-      await b.commit();
-      ops = [];
-    };
-  
-    // Gastos
-    const snapGastos = await db.collection('gastos').get();
-    const gastosExistentes = snapGastos.docs.map(d => ({
-      id: d.id,
-      ...d.data()
-    }));
-    for (const g of gastosAprobados) {
-      const fd = normFecha(g.fecha);
-      const dupGasto = gastosExistentes.some(ge => ge.concepto === g.concepto && Math.abs(Number(ge.monto) - Number(g.monto)) < 0.01 && ge.fecha === fd);
-      if (dupGasto) {
-        omitidos.push({
-          tipo: 'gasto',
-          concepto: g.concepto,
-          monto: g.monto,
-          motivo: 'duplicado'
-        });
-        continue;
-      }
-      const ref = db.collection('gastos').doc();
-      ops.push(b => b.set(ref, {
-        concepto: g.concepto,
-        tipo: g.tipo,
-        monto: g.monto,
-        fecha: fd,
-        descripcion: `Folio banco: ${g.folioBanco || '-'}`,
-        folioBanco: g.folioBanco || '',
-        creadoEn: new Date().toISOString()
-      }));
-      importados.push({
-        tipo: 'gasto',
-        concepto: g.concepto,
-        monto: g.monto
-      });
-      if (ops.length >= BATCH_SIZE) await flush();
-    }
-  
-    // Pagos
-    for (const p of pagosAprobados) {
-      const fd = normFecha(p.fecha);
-      // Anti-duplicado
-      if (existeDuplicado(p.local, p.monto, fd)) {
-        omitidos.push({
-          tipo: 'pago',
-          local: p.local,
-          monto: p.monto,
-          fecha: fd,
-          motivo: 'duplicado'
-        });
-        continue;
-      }
-  
-      // Extraer ano del deposito para matching
-      const anoDeposito = (() => {
-        const m = fd.match(/^(\d{4})/);
-        return m ? parseInt(m[1]) : null;
-      })();
-      const {
-        cargo,
-        motivo,
-        nota
-      } = buscarCargo(p.local, p.mesPago, anoDeposito);
-      if (!cargo) {
-        errores.push({
-          tipo: 'pago',
-          local: p.local,
-          monto: p.monto,
-          fecha: fd,
-          motivo,
-          nota
-        });
-        continue;
-      }
-  
-      // Liquidar el cargo: estatus=pagado, fechaPago=fecha deposito, nota=folio
-      const notaFinal = `Folio: ${p.folio || '-'} | Conciliado: ${new Date().toLocaleDateString('es-MX')}`;
-      const cargoRef = db.collection('pagos').doc(cargo.id);
-      ops.push(b => b.update(cargoRef, {
-        estatus: 'pagado',
-        fechaPago: fd,
-        metodoPago: 'Transferencia',
-        nota: notaFinal
-      }));
-      // Actualizar copia local para evitar doble-match dentro del mismo lote
-      cargo.estatus = 'pagado';
-      importados.push({
-        tipo: 'pago',
-        local: p.local,
-        monto: p.monto,
-        fecha: fd,
-        mes: p.mesPago
-      });
-      if (ops.length >= BATCH_SIZE) await flush();
-    }
-    await flush();
-    return {
-      importados,
-      omitidos,
-      errores
-    };
-  };
 
   /* ACCIONES */
   // Generar cargos fijos del mes autom ticamente
