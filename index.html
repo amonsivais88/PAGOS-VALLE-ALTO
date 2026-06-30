@@ -1425,145 +1425,60 @@ function TabSaldos({
 }
 
 /* MODAL CONCILIACION BANCARIA */
-function ModalConciliacionMovimientos(_ref) {
-  var onClose = _ref.onClose,
-    pagosExt = _ref.pagosExt;
-  var C = COLORS;
-  var _React$useState5 = React.useState(null),
-    _React$useState6 = _slicedToArray(_React$useState5, 2),
-    archivo = _React$useState6[0],
-    setArchivo = _React$useState6[1];
-  var _React$useState7 = React.useState(false),
-    _React$useState8 = _slicedToArray(_React$useState7, 2),
-    parseando = _React$useState8[0],
-    setParseando = _React$useState8[1];
-  var _React$useState9 = React.useState(null),
-    _React$useState0 = _slicedToArray(_React$useState9, 2),
-    datos = _React$useState0[0],
-    setDatos = _React$useState0[1];
-  var _React$useState1 = React.useState('pagos'),
-    _React$useState10 = _slicedToArray(_React$useState1, 2),
-    tabModal = _React$useState10[0],
-    setTabModal = _React$useState10[1];
-  var _React$useState11 = React.useState(false),
-    _React$useState12 = _slicedToArray(_React$useState11, 2),
-    importando = _React$useState12[0],
-    setImportando = _React$useState12[1];
-  var _React$useState13 = React.useState(null),
-    _React$useState14 = _slicedToArray(_React$useState13, 2),
-    resultado = _React$useState14[0],
-    setResultado = _React$useState14[1];
-  var fileRef = React.useRef();
-  var handleFile = /*#__PURE__*/function () {
-    var _handleFile = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee3(f) {
-      var d, _t3;
-      return _regenerator().w(function (_context5) {
-        while (1) switch (_context5.p = _context5.n) {
-          case 0:
-            if (f) {
-              _context5.n = 1;
-              break;
-            }
-            return _context5.a(2);
-          case 1:
-            setArchivo(f);
-            setParseando(true);
-            setDatos(null);
-            setResultado(null);
-            _context5.p = 2;
-            _context5.n = 3;
-            return parsearMovimientosEVA(f);
-          case 3:
-            d = _context5.v;
-            setDatos(d);
-            _context5.n = 5;
-            break;
-          case 4:
-            _context5.p = 4;
-            _t3 = _context5.v;
-            alert('Error al leer archivo: ' + _t3.message);
-          case 5:
-            _context5.p = 5;
-            setParseando(false);
-            return _context5.f(5);
-          case 6:
-            return _context5.a(2);
-        }
-      }, _callee3, null, [[2, 4, 5, 6]]);
-    }));
-    function handleFile(_x4) {
-      return _handleFile.apply(this, arguments);
+function ModalConciliacionMovimientos({
+  onClose,
+  pagosExt
+}) {
+  const C = COLORS;
+  const [archivo, setArchivo] = React.useState(null);
+  const [parseando, setParseando] = React.useState(false);
+  const [datos, setDatos] = React.useState(null);
+  const [tabModal, setTabModal] = React.useState('pagos');
+  const [importando, setImportando] = React.useState(false);
+  const [resultado, setResultado] = React.useState(null);
+  const fileRef = React.useRef();
+  const handleFile = async f => {
+    if (!f) return;
+    setArchivo(f);
+    setParseando(true);
+    setDatos(null);
+    setResultado(null);
+    try {
+      const d = await parsearMovimientosEVA(f);
+      setDatos(d);
+    } catch (err) {
+      alert('Error al leer archivo: ' + err.message);
+    } finally {
+      setParseando(false);
     }
-    return handleFile;
-  }();
-  var fmt = function fmt(n) {
-    return '$' + Number(n || 0).toLocaleString('es-MX', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
-    });
   };
-  var handleImportar = /*#__PURE__*/function () {
-    var _handleImportar = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee4() {
-      var res, _t4;
-      return _regenerator().w(function (_context6) {
-        while (1) switch (_context6.p = _context6.n) {
-          case 0:
-            if (datos) {
-              _context6.n = 1;
-              break;
-            }
-            return _context6.a(2);
-          case 1:
-            if (confirm("\xBFConfirmar importaci\xF3n?\n\nPagos a conciliar: ".concat(datos.pagos.filter(function (p) {
-              return p.localValido;
-            }).length, "\nGastos a registrar: ").concat(datos.gastos.length, "\n\nLos registros duplicados se omitir\xE1n autom\xE1ticamente."))) {
-              _context6.n = 2;
-              break;
-            }
-            return _context6.a(2);
-          case 2:
-            setImportando(true);
-            _context6.p = 3;
-            _context6.n = 4;
-            return importarMovimientosEVA(datos.pagos.filter(function (p) {
-              return p.localValido;
-            }), datos.gastos, pagosExt);
-          case 4:
-            res = _context6.v;
-            setResultado(res);
-            setDatos(null);
-            _context6.n = 6;
-            break;
-          case 5:
-            _context6.p = 5;
-            _t4 = _context6.v;
-            alert("Error durante importaci\xF3n: " + _t4.message);
-          case 6:
-            _context6.p = 6;
-            setImportando(false);
-            return _context6.f(6);
-          case 7:
-            return _context6.a(2);
-        }
-      }, _callee4, null, [[3, 5, 6, 7]]);
-    }));
-    function handleImportar() {
-      return _handleImportar.apply(this, arguments);
+  const fmt = n => '$' + Number(n || 0).toLocaleString('es-MX', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+  const handleImportar = async () => {
+    if (!datos) return;
+    if (!confirm(`\u00bfConfirmar importaci\u00f3n?\n\nPagos a conciliar: ${datos.pagos.filter(p => p.localValido).length}\nGastos a registrar: ${datos.gastos.length}\n\nLos registros duplicados se omitir\u00e1n autom\u00e1ticamente.`)) return;
+    setImportando(true);
+    try {
+      const res = await importarMovimientosEVA(datos.pagos.filter(p => p.localValido), datos.gastos, pagosExt);
+      setResultado(res);
+      setDatos(null);
+    } catch (err) {
+      alert('Error durante importaci\u00f3n: ' + err.message);
+    } finally {
+      setImportando(false);
     }
-    return handleImportar;
-  }();
-  var TAB_COUNTS = datos ? {
+  };
+  const TAB_COUNTS = datos ? {
     pagos: datos.pagos.length,
     terminales: datos.terminales.length,
     gastos: datos.gastos.length,
     sinId: datos.sinIdentificar.length
   } : {};
-  var badge = function badge(n) {
-    var color = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : 'bg-gray-200';
-    return n > 0 ? React.createElement('span', {
-      className: "ml-1 ".concat(color, " text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold")
-    }, n) : null;
-  };
+  const badge = (n, color = 'bg-gray-200') => n > 0 ? React.createElement('span', {
+    className: `ml-1 ${color} text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold`
+  }, n) : null;
   return React.createElement('div', {
     className: 'fixed inset-0 flex items-center justify-center z-50',
     style: {
@@ -1585,7 +1500,7 @@ function ModalConciliacionMovimientos(_ref) {
   }, 'Importa el archivo Excel de movimientos bancarios del mes')), React.createElement('button', {
     onClick: onClose,
     className: 'text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none'
-  }, "\xD7")),
+  }, '\u00d7')),
   // Body scroll
   React.createElement('div', {
     className: 'flex-1 overflow-y-auto p-6'
@@ -1593,14 +1508,9 @@ function ModalConciliacionMovimientos(_ref) {
   // Upload zone
   !resultado && React.createElement('div', {
     className: 'border-2 border-dashed border-gray-300 rounded-xl p-8 text-center mb-6 cursor-pointer hover:border-blue-400 transition',
-    onClick: function onClick() {
-      var _fileRef$current;
-      return (_fileRef$current = fileRef.current) === null || _fileRef$current === void 0 ? void 0 : _fileRef$current.click();
-    },
-    onDragOver: function onDragOver(e) {
-      return e.preventDefault();
-    },
-    onDrop: function onDrop(e) {
+    onClick: () => fileRef.current?.click(),
+    onDragOver: e => e.preventDefault(),
+    onDrop: e => {
       e.preventDefault();
       handleFile(e.dataTransfer.files[0]);
     }
@@ -1609,9 +1519,7 @@ function ModalConciliacionMovimientos(_ref) {
     type: 'file',
     accept: '.xlsx,.xls',
     className: 'hidden',
-    onChange: function onChange(e) {
-      return handleFile(e.target.files[0]);
-    }
+    onChange: e => handleFile(e.target.files[0])
   }), React.createElement(I.Sheet, {
     sz: 32,
     className: 'mx-auto mb-2 text-blue-400'
@@ -1619,7 +1527,7 @@ function ModalConciliacionMovimientos(_ref) {
     className: 'text-sm text-gray-500'
   }, 'Analizando archivo...') : archivo ? React.createElement('p', {
     className: 'text-sm font-medium text-green-600'
-  }, "\u2713 ", archivo.name, " \u2014 clic para cambiar") : React.createElement('div', {}, React.createElement('p', {
+  }, '\u2713 ', archivo.name, ' \u2014 clic para cambiar') : React.createElement('div', {}, React.createElement('p', {
     className: 'text-sm font-medium text-gray-700'
   }, 'Arrastra el archivo Excel o haz clic para seleccionar'), React.createElement('p', {
     className: 'text-xs text-gray-400 mt-1'
@@ -1631,25 +1539,23 @@ function ModalConciliacionMovimientos(_ref) {
     className: 'bg-green-50 border border-green-200 rounded-xl p-4'
   }, React.createElement('p', {
     className: 'font-semibold text-green-700 mb-2'
-  }, "\u2705 Importaci\xF3n completada"), React.createElement('p', {
+  }, '\u2705 Importaci\u00f3n completada'), React.createElement('p', {
     className: 'text-sm text-green-600'
-  }, "Registros importados: ".concat(resultado.importados.length)), React.createElement('p', {
+  }, `Registros importados: ${resultado.importados.length}`), React.createElement('p', {
     className: 'text-sm text-orange-500'
-  }, "Omitidos (duplicados): ".concat(resultado.omitidos.length)), resultado.errores.length > 0 && React.createElement('p', {
+  }, `Omitidos (duplicados): ${resultado.omitidos.length}`), resultado.errores.length > 0 && React.createElement('p', {
     className: 'text-sm text-red-500'
-  }, "Sin conciliar (revisi\xF3n manual): ".concat(resultado.errores.length))), resultado.errores.length > 0 && React.createElement('div', {
+  }, `Sin conciliar (revisi\u00f3n manual): ${resultado.errores.length}`)), resultado.errores.length > 0 && React.createElement('div', {
     className: 'bg-red-50 border border-red-200 rounded-xl p-4'
   }, React.createElement('p', {
     className: 'font-semibold text-red-700 mb-2'
-  }, "Registros que requieren revisi\xF3n manual:"), React.createElement('div', {
+  }, 'Registros que requieren revisi\u00f3n manual:'), React.createElement('div', {
     className: 'space-y-1 max-h-40 overflow-y-auto'
-  }, resultado.errores.map(function (e, i) {
-    return React.createElement('div', {
-      key: i,
-      className: 'text-xs text-red-600 bg-white rounded p-2 border border-red-100'
-    }, "Local ".concat(e.local, " | ").concat(fmt(e.monto), " | ").concat(e.fecha, " | ").concat(e.nota || e.motivo));
-  }))), React.createElement('button', {
-    onClick: function onClick() {
+  }, resultado.errores.map((e, i) => React.createElement('div', {
+    key: i,
+    className: 'text-xs text-red-600 bg-white rounded p-2 border border-red-100'
+  }, `Local ${e.local} | ${fmt(e.monto)} | ${e.fecha} | ${e.nota || e.motivo}`)))), React.createElement('button', {
+    onClick: () => {
       setResultado(null);
       setArchivo(null);
       setDatos(null);
@@ -1689,19 +1595,11 @@ function ModalConciliacionMovimientos(_ref) {
   // Tabs
   React.createElement('div', {
     className: 'flex gap-1 mb-4 border-b border-gray-200'
-  }, [['pagos', 'Pagos', 'bg-blue-500'], ['terminales', 'Terminales', 'bg-yellow-500'], ['gastos', 'Gastos', 'bg-purple-500'], ['sinId', 'Sin identificar', 'bg-red-500']].map(function (_ref2) {
-    var _ref3 = _slicedToArray(_ref2, 3),
-      key = _ref3[0],
-      label = _ref3[1],
-      color = _ref3[2];
-    return React.createElement('button', {
-      key: key,
-      onClick: function onClick() {
-        return setTabModal(key);
-      },
-      className: "px-3 py-2 text-sm font-medium rounded-t-lg transition ".concat(tabModal === key ? 'bg-white border border-b-white border-gray-200 -mb-px text-gray-900' : 'text-gray-500 hover:text-gray-700')
-    }, label, badge(TAB_COUNTS[key] || 0, color));
-  })),
+  }, [['pagos', 'Pagos', 'bg-blue-500'], ['terminales', 'Terminales', 'bg-yellow-500'], ['gastos', 'Gastos', 'bg-purple-500'], ['sinId', 'Sin identificar', 'bg-red-500']].map(([key, label, color]) => React.createElement('button', {
+    key,
+    onClick: () => setTabModal(key),
+    className: `px-3 py-2 text-sm font-medium rounded-t-lg transition ${tabModal === key ? 'bg-white border border-b-white border-gray-200 -mb-px text-gray-900' : 'text-gray-500 hover:text-gray-700'}`
+  }, label, badge(TAB_COUNTS[key] || 0, color)))),
   // Tab: Pagos
   tabModal === 'pagos' && React.createElement('div', {
     className: 'overflow-x-auto'
@@ -1709,70 +1607,62 @@ function ModalConciliacionMovimientos(_ref) {
     className: 'w-full text-xs'
   }, React.createElement('thead', {}, React.createElement('tr', {
     className: 'bg-gray-50 text-gray-500'
-  }, ['Fila', 'Fecha', 'Local', 'Monto', 'Folio', 'Mes a liquidar', 'Origen'].map(function (h) {
-    return React.createElement('th', {
-      key: h,
-      className: 'px-3 py-2 text-left font-medium'
-    }, h);
-  }))), React.createElement('tbody', {}, datos.pagos.map(function (p, i) {
-    return React.createElement('tr', {
-      key: i,
-      className: "border-t border-gray-100 ".concat(!p.localValido ? 'bg-red-50' : '')
-    }, React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-400'
-    }, p.fila), React.createElement('td', {
-      className: 'px-3 py-1.5'
-    }, p.fecha), React.createElement('td', {
-      className: 'px-3 py-1.5 font-bold',
-      style: {
-        color: p.localValido ? C.navy : '#dc2626'
-      }
-    }, p.local, !p.localValido && React.createElement('span', {
-      className: 'ml-1 text-red-400 font-normal'
-    }, '(no reconocido)')), React.createElement('td', {
-      className: 'px-3 py-1.5 font-medium text-green-700'
-    }, fmt(p.monto)), React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-500'
-    }, p.folio), React.createElement('td', {
-      className: 'px-3 py-1.5'
-    }, p.mesPago ? React.createElement('span', {
-      className: 'bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-medium'
-    }, p.mesPago) : React.createElement('span', {
-      className: 'text-gray-400'
-    }, "\u2014 m\xE1s antiguo")), React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-400'
-    }, p.origen));
-  })))),
+  }, ['Fila', 'Fecha', 'Local', 'Monto', 'Folio', 'Mes a liquidar', 'Origen'].map(h => React.createElement('th', {
+    key: h,
+    className: 'px-3 py-2 text-left font-medium'
+  }, h)))), React.createElement('tbody', {}, datos.pagos.map((p, i) => React.createElement('tr', {
+    key: i,
+    className: `border-t border-gray-100 ${!p.localValido ? 'bg-red-50' : ''}`
+  }, React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-400'
+  }, p.fila), React.createElement('td', {
+    className: 'px-3 py-1.5'
+  }, p.fecha), React.createElement('td', {
+    className: 'px-3 py-1.5 font-bold',
+    style: {
+      color: p.localValido ? C.navy : '#dc2626'
+    }
+  }, p.local, !p.localValido && React.createElement('span', {
+    className: 'ml-1 text-red-400 font-normal'
+  }, '(no reconocido)')), React.createElement('td', {
+    className: 'px-3 py-1.5 font-medium text-green-700'
+  }, fmt(p.monto)), React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-500'
+  }, p.folio), React.createElement('td', {
+    className: 'px-3 py-1.5'
+  }, p.mesPago ? React.createElement('span', {
+    className: 'bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-medium'
+  }, p.mesPago) : React.createElement('span', {
+    className: 'text-gray-400'
+  }, '\u2014 m\u00e1s antiguo')), React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-400'
+  }, p.origen)))))),
   // Tab: Terminales
   tabModal === 'terminales' && React.createElement('div', {}, React.createElement('div', {
     className: 'bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 text-xs text-yellow-700'
-  }, "\u26A0\uFE0F Estos pagos vienen con monto neto (ya descontada la comisi\xF3n de terminal). No se conciliar\xE1n autom\xE1ticamente. Reg\xEDstralos manualmente con el monto bruto correcto."), React.createElement('table', {
+  }, '\u26a0\ufe0f Estos pagos vienen con monto neto (ya descontada la comisi\u00f3n de terminal). No se conciliar\u00e1n autom\u00e1ticamente. Reg\u00edstralos manualmente con el monto bruto correcto.'), React.createElement('table', {
     className: 'w-full text-xs'
   }, React.createElement('thead', {}, React.createElement('tr', {
     className: 'bg-gray-50 text-gray-500'
-  }, ['Fila', 'Fecha', 'Local (terminal)', 'Monto neto', 'Factura', 'Folio banco'].map(function (h) {
-    return React.createElement('th', {
-      key: h,
-      className: 'px-3 py-2 text-left font-medium'
-    }, h);
-  }))), React.createElement('tbody', {}, datos.terminales.map(function (t, i) {
-    return React.createElement('tr', {
-      key: i,
-      className: 'border-t border-gray-100'
-    }, React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-400'
-    }, t.fila), React.createElement('td', {
-      className: 'px-3 py-1.5'
-    }, t.fecha), React.createElement('td', {
-      className: 'px-3 py-1.5 font-medium text-yellow-700'
-    }, t.localRaw), React.createElement('td', {
-      className: 'px-3 py-1.5 text-red-500 font-medium'
-    }, fmt(t.deposito)), React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-500'
-    }, t.factura), React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-400 text-[10px]'
-    }, t.folioBanco));
-  })))),
+  }, ['Fila', 'Fecha', 'Local (terminal)', 'Monto neto', 'Factura', 'Folio banco'].map(h => React.createElement('th', {
+    key: h,
+    className: 'px-3 py-2 text-left font-medium'
+  }, h)))), React.createElement('tbody', {}, datos.terminales.map((t, i) => React.createElement('tr', {
+    key: i,
+    className: 'border-t border-gray-100'
+  }, React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-400'
+  }, t.fila), React.createElement('td', {
+    className: 'px-3 py-1.5'
+  }, t.fecha), React.createElement('td', {
+    className: 'px-3 py-1.5 font-medium text-yellow-700'
+  }, t.localRaw), React.createElement('td', {
+    className: 'px-3 py-1.5 text-red-500 font-medium'
+  }, fmt(t.deposito)), React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-500'
+  }, t.factura), React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-400 text-[10px]'
+  }, t.folioBanco)))))),
   // Tab: Gastos
   tabModal === 'gastos' && React.createElement('div', {
     className: 'overflow-x-auto'
@@ -1780,76 +1670,66 @@ function ModalConciliacionMovimientos(_ref) {
     className: 'w-full text-xs'
   }, React.createElement('thead', {}, React.createElement('tr', {
     className: 'bg-gray-50 text-gray-500'
-  }, ['Fila', 'Fecha', 'Concepto', 'Tipo', 'Monto', 'Folio banco'].map(function (h) {
-    return React.createElement('th', {
-      key: h,
-      className: 'px-3 py-2 text-left font-medium'
-    }, h);
-  }))), React.createElement('tbody', {}, datos.gastos.map(function (g, i) {
-    return React.createElement('tr', {
-      key: i,
-      className: 'border-t border-gray-100'
-    }, React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-400'
-    }, g.fila), React.createElement('td', {
-      className: 'px-3 py-1.5'
-    }, g.fecha), React.createElement('td', {
-      className: 'px-3 py-1.5 font-medium'
-    }, g.concepto), React.createElement('td', {
-      className: 'px-3 py-1.5'
-    }, React.createElement('span', {
-      className: "px-2 py-0.5 rounded-full text-[10px] font-medium ".concat(g.tipo === 'Extraordinario' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700')
-    }, g.tipo)), React.createElement('td', {
-      className: 'px-3 py-1.5 font-medium text-red-600'
-    }, fmt(g.monto)), React.createElement('td', {
-      className: 'px-3 py-1.5 text-gray-400 text-[10px]'
-    }, g.folioBanco));
-  })))),
+  }, ['Fila', 'Fecha', 'Concepto', 'Tipo', 'Monto', 'Folio banco'].map(h => React.createElement('th', {
+    key: h,
+    className: 'px-3 py-2 text-left font-medium'
+  }, h)))), React.createElement('tbody', {}, datos.gastos.map((g, i) => React.createElement('tr', {
+    key: i,
+    className: 'border-t border-gray-100'
+  }, React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-400'
+  }, g.fila), React.createElement('td', {
+    className: 'px-3 py-1.5'
+  }, g.fecha), React.createElement('td', {
+    className: 'px-3 py-1.5 font-medium'
+  }, g.concepto), React.createElement('td', {
+    className: 'px-3 py-1.5'
+  }, React.createElement('span', {
+    className: `px-2 py-0.5 rounded-full text-[10px] font-medium ${g.tipo === 'Extraordinario' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700'}`
+  }, g.tipo)), React.createElement('td', {
+    className: 'px-3 py-1.5 font-medium text-red-600'
+  }, fmt(g.monto)), React.createElement('td', {
+    className: 'px-3 py-1.5 text-gray-400 text-[10px]'
+  }, g.folioBanco)))))),
   // Tab: Sin identificar
   tabModal === 'sinId' && React.createElement('div', {}, datos.sinIdentificar.length === 0 ? React.createElement('p', {
     className: 'text-sm text-green-600 text-center py-4'
-  }, "\u2705 No hay registros sin identificar") : React.createElement('div', {
+  }, '\u2705 No hay registros sin identificar') : React.createElement('div', {
     className: 'space-y-2'
-  }, datos.sinIdentificar.map(function (s, i) {
-    return React.createElement('div', {
-      key: i,
-      className: 'bg-red-50 border border-red-100 rounded-lg p-3 text-xs'
-    }, React.createElement('div', {
-      className: 'flex justify-between items-start'
-    }, React.createElement('span', {
-      className: 'font-medium text-red-700'
-    }, "Fila ".concat(s.fila, " \u2014 ").concat(s.motivo)), s.deposito && React.createElement('span', {
-      className: 'text-red-600 font-bold'
-    }, fmt(s.deposito))), s.nota && React.createElement('p', {
-      className: 'text-red-500 mt-1'
-    }, s.nota), s.localRaw && React.createElement('p', {
-      className: 'text-gray-500 mt-0.5'
-    }, 'Local: ', s.localRaw), s.fecha && React.createElement('p', {
-      className: 'text-gray-400 mt-0.5'
-    }, 'Fecha: ', s.fecha));
-  }))))),
+  }, datos.sinIdentificar.map((s, i) => React.createElement('div', {
+    key: i,
+    className: 'bg-red-50 border border-red-100 rounded-lg p-3 text-xs'
+  }, React.createElement('div', {
+    className: 'flex justify-between items-start'
+  }, React.createElement('span', {
+    className: 'font-medium text-red-700'
+  }, `Fila ${s.fila} \u2014 ${s.motivo}`), s.deposito && React.createElement('span', {
+    className: 'text-red-600 font-bold'
+  }, fmt(s.deposito))), s.nota && React.createElement('p', {
+    className: 'text-red-500 mt-1'
+  }, s.nota), s.localRaw && React.createElement('p', {
+    className: 'text-gray-500 mt-0.5'
+  }, 'Local: ', s.localRaw), s.fecha && React.createElement('p', {
+    className: 'text-gray-400 mt-0.5'
+  }, 'Fecha: ', s.fecha))))))),
   // Footer con botn importar
   datos && !resultado && React.createElement('div', {
     className: 'px-6 py-4 border-t border-gray-200 flex justify-between items-center'
   }, React.createElement('p', {
     className: 'text-xs text-gray-500'
-  }, "".concat(datos.pagos.filter(function (p) {
-    return p.localValido;
-  }).length, " pagos v\xE1lidos \xB7 ").concat(datos.gastos.length, " gastos \xB7 ").concat(datos.sinIdentificar.length, " sin identificar")), React.createElement('div', {
+  }, `${datos.pagos.filter(p => p.localValido).length} pagos v\u00e1lidos \u00b7 ${datos.gastos.length} gastos \u00b7 ${datos.sinIdentificar.length} sin identificar`), React.createElement('div', {
     className: 'flex gap-2'
   }, React.createElement('button', {
     onClick: onClose,
     className: 'px-4 py-2 rounded-lg border border-gray-300 text-sm font-medium'
   }, 'Cancelar'), React.createElement('button', {
     onClick: handleImportar,
-    disabled: importando || datos.pagos.filter(function (p) {
-      return p.localValido;
-    }).length === 0,
+    disabled: importando || datos.pagos.filter(p => p.localValido).length === 0,
     className: 'px-5 py-2 rounded-lg text-white font-medium text-sm hover:shadow-md transition disabled:opacity-50',
     style: {
       background: C.navy
     }
-  }, importando ? 'Importando...' : "Confirmar e importar")))));
+  }, importando ? 'Importando...' : `Confirmar e importar`)))));
 }
 
 function ModalConciliacion({
@@ -2441,16 +2321,16 @@ function App() {
   useEffect(() => setGPg(1), [gMes, gAno]);
 
   // === CONCILIACION MOVIMIENTOS EVA: funciones ===
-  var parsearMovimientosEVA = function parsearMovimientosEVA(file) {
-    return new Promise(function (resolve, reject) {
-      var reader = new FileReader();
-      reader.onload = function (e) {
+  const parsearMovimientosEVA = file => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => {
         try {
-          var wb = XLSX.read(e.target.result, {
+          const wb = XLSX.read(e.target.result, {
             type: 'binary'
           });
-          var ws = wb.Sheets[wb.SheetNames[0]];
-          var data = XLSX.utils.sheet_to_json(ws, {
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const data = XLSX.utils.sheet_to_json(ws, {
             header: 1,
             raw: false
           });
@@ -2458,49 +2338,39 @@ function App() {
             reject(new Error('Archivo vacio'));
             return;
           }
-          var headers = data[0].map(function (h) {
-            return String(h || '').toLowerCase().trim();
-          });
-          var idx = function idx(name) {
-            return headers.findIndex(function (h) {
-              return h === name;
-            });
-          };
-          var colFecha = idx('fecha');
-          var colFolio = idx('folio');
-          var colDeposito = idx('deposito');
-          var colRetiro = idx('retiro');
-          var colFactura = idx('factura');
-          var colLocal = idx('local');
-          var colDesglose = idx('desglose');
-          var colMesPago = idx('mes de pago');
-          var colConceptoGasto = idx('concepto de gasto');
-          var colTipoGasto = idx('tipo de gasto');
-          var LOCALES_VALIDOS = function () {
-            var v = new Set(['PB2', 'PB3', 'P8']);
-            for (var p = 1; p <= 7; p++) for (var n = 1; n <= 12; n++) v.add("".concat(p).concat(String(n).padStart(2, '0')));
+          const headers = data[0].map(h => String(h || '').toLowerCase().trim());
+          const idx = name => headers.findIndex(h => h === name);
+          const colFecha = idx('fecha');
+          const colFolio = idx('folio');
+          const colDeposito = idx('deposito');
+          const colRetiro = idx('retiro');
+          const colFactura = idx('factura');
+          const colLocal = idx('local');
+          const colDesglose = idx('desglose');
+          const colMesPago = idx('mes de pago');
+          const colConceptoGasto = idx('concepto de gasto');
+          const colTipoGasto = idx('tipo de gasto');
+          const LOCALES_VALIDOS = (() => {
+            const v = new Set(['PB2', 'PB3', 'P8']);
+            for (let p = 1; p <= 7; p++) for (let n = 1; n <= 12; n++) v.add(`${p}${String(n).padStart(2, '0')}`);
             return v;
-          }();
-          var normalizarLocal = function normalizarLocal(raw) {
+          })();
+          const normalizarLocal = raw => {
             if (!raw) return null;
-            var s = String(raw).trim().toUpperCase();
+            const s = String(raw).trim().toUpperCase();
             if (s === 'PB2' || s === 'PB3') return s;
             if (s.includes('PISO 8') || s === 'P8') return 'P8';
-            var m = s.match(/^(\d{3})$/);
+            const m = s.match(/^(\d{3})$/);
             if (m && LOCALES_VALIDOS.has(m[1])) return m[1];
             return null;
           };
-          var esTerminal = function esTerminal(localRaw) {
-            return localRaw && String(localRaw).toUpperCase().includes('TERMINAL');
-          };
-          var parseDesglose = function parseDesglose(texto) {
+          const esTerminal = localRaw => localRaw && String(localRaw).toUpperCase().includes('TERMINAL');
+          const parseDesglose = texto => {
             if (!texto) return [];
-            var lineas = String(texto).split(/\r?\n/).map(function (l) {
-              return l.trim();
-            }).filter(Boolean);
-            var out = [];
-            lineas.forEach(function (linea) {
-              var m = linea.match(/^(\w+)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*(.+)$/);
+            const lineas = String(texto).split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const out = [];
+            lineas.forEach(linea => {
+              let m = linea.match(/^(\w+)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*(.+)$/);
               if (m) {
                 out.push({
                   local: m[1],
@@ -2520,29 +2390,29 @@ function App() {
             });
             return out;
           };
-          var pagos = [],
+          const pagos = [],
             terminales = [],
             gastos = [],
             sinIdentificar = [];
-          data.slice(1).forEach(function (row, i) {
-            var fecha = row[colFecha];
-            var referencia0 = row[4]; // col REFERENCIA
+          data.slice(1).forEach((row, i) => {
+            const fecha = row[colFecha];
+            const referencia0 = row[4]; // col REFERENCIA
             if (!fecha || String(referencia0 || '').trim().toUpperCase() === 'TOTAL') return;
-            var deposito = Number(String(row[colDeposito] || '0').replace(/[$,\s]/g, '')) || 0;
-            var retiro = Number(String(row[colRetiro] || '0').replace(/[$,\s]/g, '')) || 0;
-            var factura = row[colFactura];
-            var localRaw = row[colLocal];
-            var desglose = row[colDesglose];
-            var mesPago = row[colMesPago];
-            var conceptoGasto = row[colConceptoGasto];
-            var tipoGasto = row[colTipoGasto];
-            var folioBanco = row[colFolio];
+            const deposito = Number(String(row[colDeposito] || '0').replace(/[$,\s]/g, '')) || 0;
+            const retiro = Number(String(row[colRetiro] || '0').replace(/[$,\s]/g, '')) || 0;
+            const factura = row[colFactura];
+            const localRaw = row[colLocal];
+            const desglose = row[colDesglose];
+            const mesPago = row[colMesPago];
+            const conceptoGasto = row[colConceptoGasto];
+            const tipoGasto = row[colTipoGasto];
+            const folioBanco = row[colFolio];
   
             // GASTO (retiro con concepto)
             if (retiro > 0 && conceptoGasto) {
               gastos.push({
                 fila: i + 2,
-                fecha: fecha,
+                fecha,
                 concepto: String(conceptoGasto),
                 tipo: tipoGasto ? String(tipoGasto) : 'Operativo',
                 monto: retiro,
@@ -2556,9 +2426,9 @@ function App() {
             if (esTerminal(localRaw)) {
               terminales.push({
                 fila: i + 2,
-                fecha: fecha,
+                fecha,
                 localRaw: String(localRaw),
-                deposito: deposito,
+                deposito,
                 factura: factura ? String(factura) : '',
                 folioBanco: folioBanco || ''
               });
@@ -2567,26 +2437,26 @@ function App() {
   
             // DESGLOSE multi-local
             if (desglose) {
-              var lineas = parseDesglose(desglose);
+              const lineas = parseDesglose(desglose);
               if (lineas.length === 0) {
                 sinIdentificar.push({
                   fila: i + 2,
                   motivo: 'desglose no parseable',
-                  desglose: desglose,
-                  fecha: fecha
+                  desglose,
+                  fecha
                 });
                 return;
               }
-              var sumaLineas = 0;
-              var huboCompleto = false;
-              lineas.forEach(function (l) {
+              let sumaLineas = 0;
+              let huboCompleto = false;
+              lineas.forEach(l => {
                 if (l.local) {
                   huboCompleto = true;
                   sumaLineas += l.monto;
-                  var localNorm = normalizarLocal(l.local);
+                  const localNorm = normalizarLocal(l.local);
                   pagos.push({
                     fila: i + 2,
-                    fecha: fecha,
+                    fecha,
                     local: localNorm || l.local,
                     localValido: !!localNorm,
                     monto: l.monto,
@@ -2596,12 +2466,12 @@ function App() {
                   });
                 } else {
                   sumaLineas += deposito;
-                  var _localNorm = normalizarLocal(localRaw);
+                  const localNorm = normalizarLocal(localRaw);
                   pagos.push({
                     fila: i + 2,
-                    fecha: fecha,
-                    local: _localNorm || String(localRaw || ''),
-                    localValido: !!_localNorm,
+                    fecha,
+                    local: localNorm || String(localRaw || ''),
+                    localValido: !!localNorm,
                     monto: deposito,
                     folio: l.folio,
                     mesPago: mesPago ? String(mesPago) : null,
@@ -2610,18 +2480,18 @@ function App() {
                 }
               });
               if (huboCompleto) {
-                var diff = Math.round((deposito - sumaLineas) * 100) / 100;
+                const diff = Math.round((deposito - sumaLineas) * 100) / 100;
                 if (Math.abs(diff) > 0.5) {
-                  var tipo = diff > 0 ? 'sobrante' : 'faltante';
+                  const tipo = diff > 0 ? 'sobrante' : 'faltante';
                   sinIdentificar.push({
                     fila: i + 2,
-                    fecha: fecha,
+                    fecha,
                     motivo: 'descuadre desglose vs deposito',
-                    deposito: deposito,
+                    deposito,
                     sumaLineasDesglose: sumaLineas,
                     diferencia: Math.abs(diff),
-                    tipo: tipo,
-                    nota: "Dep\xF3sito fila ".concat(i + 2, " es $").concat(deposito.toLocaleString('es-MX'), " pero desglose suma $").concat(sumaLineas.toLocaleString('es-MX'), " (").concat(tipo, " de $").concat(Math.abs(diff).toLocaleString('es-MX'), " sin asignar)")
+                    tipo,
+                    nota: `Dep\u00f3sito fila ${i + 2} es $${deposito.toLocaleString('es-MX')} pero desglose suma $${sumaLineas.toLocaleString('es-MX')} (${tipo} de $${Math.abs(diff).toLocaleString('es-MX')} sin asignar)`
                   });
                 }
               }
@@ -2633,20 +2503,18 @@ function App() {
               sinIdentificar.push({
                 fila: i + 2,
                 motivo: 'sin local',
-                fecha: fecha,
-                deposito: deposito,
+                fecha,
+                deposito,
                 factura: factura ? String(factura) : ''
               });
               return;
             }
-            var localesStr = String(localRaw).split(',').map(function (x) {
-              return x.trim();
-            }).filter(Boolean);
+            const localesStr = String(localRaw).split(',').map(x => x.trim()).filter(Boolean);
             if (localesStr.length === 1) {
-              var localNorm = normalizarLocal(localesStr[0]);
+              const localNorm = normalizarLocal(localesStr[0]);
               pagos.push({
                 fila: i + 2,
-                fecha: fecha,
+                fecha,
                 local: localNorm || localesStr[0],
                 localValido: !!localNorm,
                 monto: deposito,
@@ -2657,18 +2525,18 @@ function App() {
             } else {
               sinIdentificar.push({
                 fila: i + 2,
-                motivo: "m\xFAltiples locales sin desglose",
+                motivo: 'm\u00faltiples locales sin desglose',
                 localRaw: String(localRaw),
-                deposito: deposito,
-                fecha: fecha
+                deposito,
+                fecha
               });
             }
           });
           resolve({
-            pagos: pagos,
-            terminales: terminales,
-            gastos: gastos,
-            sinIdentificar: sinIdentificar
+            pagos,
+            terminales,
+            gastos,
+            sinIdentificar
           });
         } catch (err) {
           reject(err);
@@ -2680,323 +2548,182 @@ function App() {
   };
   
   // --- BLOQUE B-2: importar movimientos conciliados a Firebase ---
-  var importarMovimientosEVA = /*#__PURE__*/function () {
-    var _importarMovimientosEVA = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee2(pagosAprobados, gastosAprobados, todosLosPagos) {
-      var db, MESES_L_LOCAL, mesNombreANum, normFecha, snapPagos, pagosExistentes, existeDuplicado, buscarCargo, importados, omitidos, errores, BATCH_SIZE, ops, flush, snapGastos, gastosExistentes, _iterator, _step, _loop, _iterator2, _step2, _loop2, _ret, _t, _t2;
-      return _regenerator().w(function (_context4) {
-        while (1) switch (_context4.p = _context4.n) {
-          case 0:
-            db = dbRef.current;
-            MESES_L_LOCAL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-            mesNombreANum = function mesNombreANum(nombre) {
-              if (!nombre) return null;
-              var i = MESES_L_LOCAL.findIndex(function (m) {
-                return m.toLowerCase() === String(nombre).trim().toLowerCase();
-              });
-              return i >= 0 ? i + 1 : null;
-            }; // Convertir fecha DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD
-            normFecha = function normFecha(f) {
-              if (!f) return '';
-              var s = String(f).trim();
-              var m1 = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
-              if (m1) return "".concat(m1[3], "-").concat(m1[2], "-").concat(m1[1]);
-              var m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-              if (m2) return s;
-              return s;
-            }; // Cargar todos los pagos existentes (para anti-duplicado y busqueda de cargos)
-            _context4.n = 1;
-            return db.collection('pagos').get();
-          case 1:
-            snapPagos = _context4.v;
-            pagosExistentes = snapPagos.docs.map(function (d) {
-              return _objectSpread({
-                id: d.id
-              }, d.data());
-            });
-            existeDuplicado = function existeDuplicado(unidadId, monto, fechaDeposito) {
-              var fd = normFecha(fechaDeposito);
-              return pagosExistentes.some(function (p) {
-                return p.unidadId === unidadId && Math.abs(Number(p.monto) - Number(monto)) < 0.01 && p.fechaPago === fd && !p.cancelado;
-              });
-            };
-            buscarCargo = function buscarCargo(unidadId, mesPagoNombre, anoRef) {
-              var candidatos = pagosExistentes.filter(function (c) {
-                return c.unidadId === unidadId && c.estatus === 'pendiente' && c.tipoMov === 'cargo' && !c.cancelado;
-              });
-              if (candidatos.length === 0) return {
-                cargo: null,
-                motivo: 'sin-pendientes'
-              };
-              var mesNum = mesNombreANum(mesPagoNombre);
-              if (mesNum) {
-                var match = candidatos.find(function (c) {
-                  var d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
-                  if (d.getMonth() + 1 !== mesNum) return false;
-                  if (anoRef && d.getFullYear() !== anoRef) return false;
-                  return true;
-                }) || candidatos.find(function (c) {
-                  var d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
-                  return d.getMonth() + 1 === mesNum;
-                });
-                if (match) return {
-                  cargo: match,
-                  motivo: 'ok'
-                };
-                return {
-                  cargo: null,
-                  motivo: 'sin-cargo-para-mes',
-                  nota: "No existe cargo pendiente de ".concat(mesPagoNombre, " para local ").concat(unidadId)
-                };
-              }
-              candidatos.sort(function (a, b) {
-                return String(a.fecha || a.fechaVencimiento || '').localeCompare(String(b.fecha || b.fechaVencimiento || ''));
-              });
-              return {
-                cargo: candidatos[0],
-                motivo: 'ok'
-              };
-            };
-            importados = [], omitidos = [], errores = [];
-            BATCH_SIZE = 400;
-            ops = [];
-            flush = /*#__PURE__*/function () {
-              var _flush = _asyncToGenerator(/*#__PURE__*/_regenerator().m(function _callee() {
-                var b;
-                return _regenerator().w(function (_context) {
-                  while (1) switch (_context.n) {
-                    case 0:
-                      if (!(ops.length === 0)) {
-                        _context.n = 1;
-                        break;
-                      }
-                      return _context.a(2);
-                    case 1:
-                      b = db.batch();
-                      ops.forEach(function (fn) {
-                        return fn(b);
-                      });
-                      _context.n = 2;
-                      return b.commit();
-                    case 2:
-                      ops = [];
-                    case 3:
-                      return _context.a(2);
-                  }
-                }, _callee);
-              }));
-              function flush() {
-                return _flush.apply(this, arguments);
-              }
-              return flush;
-            }(); // Gastos
-            _context4.n = 2;
-            return db.collection('gastos').get();
-          case 2:
-            snapGastos = _context4.v;
-            gastosExistentes = snapGastos.docs.map(function (d) {
-              return _objectSpread({
-                id: d.id
-              }, d.data());
-            });
-            _iterator = _createForOfIteratorHelper(gastosAprobados);
-            _context4.p = 3;
-            _loop = /*#__PURE__*/_regenerator().m(function _loop() {
-              var g, fd, dupGasto, ref;
-              return _regenerator().w(function (_context2) {
-                while (1) switch (_context2.n) {
-                  case 0:
-                    g = _step.value;
-                    fd = normFecha(g.fecha);
-                    dupGasto = gastosExistentes.some(function (ge) {
-                      return ge.concepto === g.concepto && Math.abs(Number(ge.monto) - Number(g.monto)) < 0.01 && ge.fecha === fd;
-                    });
-                    if (!dupGasto) {
-                      _context2.n = 1;
-                      break;
-                    }
-                    omitidos.push({
-                      tipo: 'gasto',
-                      concepto: g.concepto,
-                      monto: g.monto,
-                      motivo: 'duplicado'
-                    });
-                    return _context2.a(2, 1);
-                  case 1:
-                    ref = db.collection('gastos').doc();
-                    ops.push(function (b) {
-                      return b.set(ref, {
-                        concepto: g.concepto,
-                        tipo: g.tipo,
-                        monto: g.monto,
-                        fecha: fd,
-                        descripcion: "Folio banco: ".concat(g.folioBanco || '-'),
-                        folioBanco: g.folioBanco || '',
-                        creadoEn: new Date().toISOString()
-                      });
-                    });
-                    importados.push({
-                      tipo: 'gasto',
-                      concepto: g.concepto,
-                      monto: g.monto
-                    });
-                    if (!(ops.length >= BATCH_SIZE)) {
-                      _context2.n = 2;
-                      break;
-                    }
-                    _context2.n = 2;
-                    return flush();
-                  case 2:
-                    return _context2.a(2);
-                }
-              }, _loop);
-            });
-            _iterator.s();
-          case 4:
-            if ((_step = _iterator.n()).done) {
-              _context4.n = 7;
-              break;
-            }
-            return _context4.d(_regeneratorValues(_loop()), 5);
-          case 5:
-            if (!_context4.v) {
-              _context4.n = 6;
-              break;
-            }
-            return _context4.a(3, 6);
-          case 6:
-            _context4.n = 4;
-            break;
-          case 7:
-            _context4.n = 9;
-            break;
-          case 8:
-            _context4.p = 8;
-            _t = _context4.v;
-            _iterator.e(_t);
-          case 9:
-            _context4.p = 9;
-            _iterator.f();
-            return _context4.f(9);
-          case 10:
-            // Pagos
-            _iterator2 = _createForOfIteratorHelper(pagosAprobados);
-            _context4.p = 11;
-            _loop2 = /*#__PURE__*/_regenerator().m(function _loop2() {
-              var p, fd, anoDeposito, _buscarCargo, cargo, motivo, nota, notaFinal, cargoRef;
-              return _regenerator().w(function (_context3) {
-                while (1) switch (_context3.n) {
-                  case 0:
-                    p = _step2.value;
-                    fd = normFecha(p.fecha); // Anti-duplicado
-                    if (!existeDuplicado(p.local, p.monto, fd)) {
-                      _context3.n = 1;
-                      break;
-                    }
-                    omitidos.push({
-                      tipo: 'pago',
-                      local: p.local,
-                      monto: p.monto,
-                      fecha: fd,
-                      motivo: 'duplicado'
-                    });
-                    return _context3.a(2, 0);
-                  case 1:
-                    // Extraer ano del deposito para matching
-                    anoDeposito = function () {
-                      var m = fd.match(/^(\d{4})/);
-                      return m ? parseInt(m[1]) : null;
-                    }();
-                    _buscarCargo = buscarCargo(p.local, p.mesPago, anoDeposito), cargo = _buscarCargo.cargo, motivo = _buscarCargo.motivo, nota = _buscarCargo.nota;
-                    if (cargo) {
-                      _context3.n = 2;
-                      break;
-                    }
-                    errores.push({
-                      tipo: 'pago',
-                      local: p.local,
-                      monto: p.monto,
-                      fecha: fd,
-                      motivo: motivo,
-                      nota: nota
-                    });
-                    return _context3.a(2, 0);
-                  case 2:
-                    // Liquidar el cargo: estatus=pagado, fechaPago=fecha deposito, nota=folio
-                    notaFinal = "Folio: ".concat(p.folio || '-', " | Conciliado: ").concat(new Date().toLocaleDateString('es-MX'));
-                    cargoRef = db.collection('pagos').doc(cargo.id);
-                    ops.push(function (b) {
-                      return b.update(cargoRef, {
-                        estatus: 'pagado',
-                        fechaPago: fd,
-                        metodoPago: 'Transferencia',
-                        nota: notaFinal
-                      });
-                    });
-                    // Actualizar copia local para evitar doble-match dentro del mismo lote
-                    cargo.estatus = 'pagado';
-                    importados.push({
-                      tipo: 'pago',
-                      local: p.local,
-                      monto: p.monto,
-                      fecha: fd,
-                      mes: p.mesPago
-                    });
-                    if (!(ops.length >= BATCH_SIZE)) {
-                      _context3.n = 3;
-                      break;
-                    }
-                    _context3.n = 3;
-                    return flush();
-                  case 3:
-                    return _context3.a(2);
-                }
-              }, _loop2);
-            });
-            _iterator2.s();
-          case 12:
-            if ((_step2 = _iterator2.n()).done) {
-              _context4.n = 15;
-              break;
-            }
-            return _context4.d(_regeneratorValues(_loop2()), 13);
-          case 13:
-            _ret = _context4.v;
-            if (!(_ret === 0)) {
-              _context4.n = 14;
-              break;
-            }
-            return _context4.a(3, 14);
-          case 14:
-            _context4.n = 12;
-            break;
-          case 15:
-            _context4.n = 17;
-            break;
-          case 16:
-            _context4.p = 16;
-            _t2 = _context4.v;
-            _iterator2.e(_t2);
-          case 17:
-            _context4.p = 17;
-            _iterator2.f();
-            return _context4.f(17);
-          case 18:
-            _context4.n = 19;
-            return flush();
-          case 19:
-            return _context4.a(2, {
-              importados: importados,
-              omitidos: omitidos,
-              errores: errores
-            });
-        }
-      }, _callee2, null, [[11, 16, 17, 18], [3, 8, 9, 10]]);
+  const importarMovimientosEVA = async (pagosAprobados, gastosAprobados, todosLosPagos) => {
+    const db = dbRef.current;
+    const MESES_L_LOCAL = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const mesNombreANum = nombre => {
+      if (!nombre) return null;
+      const i = MESES_L_LOCAL.findIndex(m => m.toLowerCase() === String(nombre).trim().toLowerCase());
+      return i >= 0 ? i + 1 : null;
+    };
+  
+    // Convertir fecha DD-MM-YYYY o YYYY-MM-DD a YYYY-MM-DD
+    const normFecha = f => {
+      if (!f) return '';
+      const s = String(f).trim();
+      const m1 = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+      if (m1) return `${m1[3]}-${m1[2]}-${m1[1]}`;
+      const m2 = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (m2) return s;
+      return s;
+    };
+  
+    // Cargar todos los pagos existentes (para anti-duplicado y busqueda de cargos)
+    const snapPagos = await db.collection('pagos').get();
+    const pagosExistentes = snapPagos.docs.map(d => ({
+      id: d.id,
+      ...d.data()
     }));
-    function importarMovimientosEVA(_x, _x2, _x3) {
-      return _importarMovimientosEVA.apply(this, arguments);
+    const existeDuplicado = (unidadId, monto, fechaDeposito) => {
+      const fd = normFecha(fechaDeposito);
+      return pagosExistentes.some(p => p.unidadId === unidadId && Math.abs(Number(p.monto) - Number(monto)) < 0.01 && p.fechaPago === fd && !p.cancelado);
+    };
+    const buscarCargo = (unidadId, mesPagoNombre, anoRef) => {
+      const candidatos = pagosExistentes.filter(c => c.unidadId === unidadId && c.estatus === 'pendiente' && c.tipoMov === 'cargo' && !c.cancelado);
+      if (candidatos.length === 0) return {
+        cargo: null,
+        motivo: 'sin-pendientes'
+      };
+      const mesNum = mesNombreANum(mesPagoNombre);
+      if (mesNum) {
+        const match = candidatos.find(c => {
+          const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
+          if (d.getMonth() + 1 !== mesNum) return false;
+          if (anoRef && d.getFullYear() !== anoRef) return false;
+          return true;
+        }) || candidatos.find(c => {
+          const d = new Date((c.fecha || c.fechaVencimiento || '') + 'T00:00:00');
+          return d.getMonth() + 1 === mesNum;
+        });
+        if (match) return {
+          cargo: match,
+          motivo: 'ok'
+        };
+        return {
+          cargo: null,
+          motivo: 'sin-cargo-para-mes',
+          nota: `No existe cargo pendiente de ${mesPagoNombre} para local ${unidadId}`
+        };
+      }
+      candidatos.sort((a, b) => String(a.fecha || a.fechaVencimiento || '').localeCompare(String(b.fecha || b.fechaVencimiento || '')));
+      return {
+        cargo: candidatos[0],
+        motivo: 'ok'
+      };
+    };
+    const importados = [],
+      omitidos = [],
+      errores = [];
+    const BATCH_SIZE = 400;
+    let ops = [];
+    const flush = async () => {
+      if (ops.length === 0) return;
+      const b = db.batch();
+      ops.forEach(fn => fn(b));
+      await b.commit();
+      ops = [];
+    };
+  
+    // Gastos
+    const snapGastos = await db.collection('gastos').get();
+    const gastosExistentes = snapGastos.docs.map(d => ({
+      id: d.id,
+      ...d.data()
+    }));
+    for (const g of gastosAprobados) {
+      const fd = normFecha(g.fecha);
+      const dupGasto = gastosExistentes.some(ge => ge.concepto === g.concepto && Math.abs(Number(ge.monto) - Number(g.monto)) < 0.01 && ge.fecha === fd);
+      if (dupGasto) {
+        omitidos.push({
+          tipo: 'gasto',
+          concepto: g.concepto,
+          monto: g.monto,
+          motivo: 'duplicado'
+        });
+        continue;
+      }
+      const ref = db.collection('gastos').doc();
+      ops.push(b => b.set(ref, {
+        concepto: g.concepto,
+        tipo: g.tipo,
+        monto: g.monto,
+        fecha: fd,
+        descripcion: `Folio banco: ${g.folioBanco || '-'}`,
+        folioBanco: g.folioBanco || '',
+        creadoEn: new Date().toISOString()
+      }));
+      importados.push({
+        tipo: 'gasto',
+        concepto: g.concepto,
+        monto: g.monto
+      });
+      if (ops.length >= BATCH_SIZE) await flush();
     }
-    return importarMovimientosEVA;
-  }();
+  
+    // Pagos
+    for (const p of pagosAprobados) {
+      const fd = normFecha(p.fecha);
+      // Anti-duplicado
+      if (existeDuplicado(p.local, p.monto, fd)) {
+        omitidos.push({
+          tipo: 'pago',
+          local: p.local,
+          monto: p.monto,
+          fecha: fd,
+          motivo: 'duplicado'
+        });
+        continue;
+      }
+  
+      // Extraer ano del deposito para matching
+      const anoDeposito = (() => {
+        const m = fd.match(/^(\d{4})/);
+        return m ? parseInt(m[1]) : null;
+      })();
+      const {
+        cargo,
+        motivo,
+        nota
+      } = buscarCargo(p.local, p.mesPago, anoDeposito);
+      if (!cargo) {
+        errores.push({
+          tipo: 'pago',
+          local: p.local,
+          monto: p.monto,
+          fecha: fd,
+          motivo,
+          nota
+        });
+        continue;
+      }
+  
+      // Liquidar el cargo: estatus=pagado, fechaPago=fecha deposito, nota=folio
+      const notaFinal = `Folio: ${p.folio || '-'} | Conciliado: ${new Date().toLocaleDateString('es-MX')}`;
+      const cargoRef = db.collection('pagos').doc(cargo.id);
+      ops.push(b => b.update(cargoRef, {
+        estatus: 'pagado',
+        fechaPago: fd,
+        metodoPago: 'Transferencia',
+        nota: notaFinal
+      }));
+      // Actualizar copia local para evitar doble-match dentro del mismo lote
+      cargo.estatus = 'pagado';
+      importados.push({
+        tipo: 'pago',
+        local: p.local,
+        monto: p.monto,
+        fecha: fd,
+        mes: p.mesPago
+      });
+      if (ops.length >= BATCH_SIZE) await flush();
+    }
+    await flush();
+    return {
+      importados,
+      omitidos,
+      errores
+    };
+  };
 
   /* ACCIONES */
   // Generar cargos fijos del mes autom ticamente
