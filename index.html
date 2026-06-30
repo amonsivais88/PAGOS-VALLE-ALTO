@@ -1429,7 +1429,6 @@ function ModalConciliacionMovimientos({
   onClose,
   pagosExt
 }) {
-  const C = COLORS;
   const [archivo, setArchivo] = React.useState(null);
   const [parseando, setParseando] = React.useState(false);
   const [datos, setDatos] = React.useState(null);
@@ -2320,7 +2319,7 @@ function App() {
   useEffect(() => setPg(1), [fMes, fAno, fLocal, fEst, fConc, fBusq, sortDir, filtroP]);
   useEffect(() => setGPg(1), [gMes, gAno]);
 
-  // === CONCILIACION MOVIMIENTOS EVA: funciones ===
+  // === CONCILIACION MOVIMIENTOS EVA ===
   const parsearMovimientosEVA = file => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
