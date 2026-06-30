@@ -2172,16 +2172,17 @@ function ModalConciliacion({
 }
 // === CONCILIACION MOVIMIENTOS EVA (funciones globales) ===
 // === CONCILIACION MOVIMIENTOS EVA ===
-const parsearMovimientosEVA = file => {
+const parsearMovimientosEVA = async file => {
+  await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => {
       try {
-        const wb = XLSX.read(e.target.result, {
+        const wb = window.XLSX.read(e.target.result, {
           type: 'binary'
         });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json(ws, {
+        const data = window.XLSX.utils.sheet_to_json(ws, {
           header: 1,
           raw: false
         });
