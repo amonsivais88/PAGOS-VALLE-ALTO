@@ -2255,8 +2255,9 @@ function App() {
           };
           const pagos=[], terminales=[], gastos=[], sinId=[];
           data.slice(1).forEach((row,i) => {
-            const fecha = row[colFecha];
-            if (!fecha || String(row[4]||'').trim().toUpperCase()==='TOTAL') return;
+            const fechaRaw = row[colFecha];
+            if (!fechaRaw || String(row[4]||'').trim().toUpperCase()==='TOTAL') return;
+            const fecha = excelFecha(fechaRaw);
             const dep = Number(String(row[colDep]||'0').replace(/[$,\s]/g,''))||0;
             const ret = Number(String(row[colRet]||'0').replace(/[$,\s]/g,''))||0;
             const localRaw = row[colLocal]; const desglose = row[colDesg];
@@ -2318,7 +2319,7 @@ function App() {
     const db = dbRef.current;
     const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     const mesNum = nombre => { if (!nombre) return null; var i=MESES.findIndex(m=>m.toLowerCase()===String(nombre).trim().toLowerCase()); return i>=0?i+1:null; };
-    const normF = f => { if (!f) return ''; var s=String(f).trim(); var m=s.match(/^(\d{2})-(\d{2})-(\d{4})$/); if(m) return m[3]+'-'+m[2]+'-'+m[1]; return s; };
+    const normF = f => excelFecha(f);
 
     // Cargar TODOS los pagos existentes una sola vez
     const snapP = await db.collection('pagos').get();
@@ -2352,42 +2353,50 @@ function App() {
 
     const importados=[], omitidos=[], errores=[];
     var ops=[];
+    const pendientesRegistrados = {};
     const flush = async () => { if (!ops.length) return; var b=db.batch(); ops.forEach(fn=>fn(b)); await b.commit(); ops=[]; };
 
     // Gastos
     const snapG = await db.collection('gastos').get();
     const gastosEx = snapG.docs.map(d=>({id:d.id,...d.data()}));
-    for (var gi=0;gi<gastosAprobados.length;gi++) {
-      var g=gastosAprobados[gi]; var gfd=normF(g.fecha);
-      var dupG=gastosEx.some(ge=>ge.concepto===g.concepto&&Math.abs(Number(ge.monto)-Number(g.monto))<0.01&&ge.fecha===gfd);
+    for (let gi=0;gi<gastosAprobados.length;gi++) {
+      let g=gastosAprobados[gi]; let gfd=normF(g.fecha);
+      let dupG=gastosEx.some(ge=>ge.concepto===g.concepto&&Math.abs(Number(ge.monto)-Number(g.monto))<0.01&&ge.fecha===gfd);
       if (dupG) { omitidos.push({tipo:'gasto',concepto:g.concepto,monto:g.monto,motivo:'duplicado'}); continue; }
-      var gRef=db.collection('gastos').doc();
-      ops.push(b=>b.set(gRef,{concepto:g.concepto,tipo:g.tipo,monto:g.monto,fecha:gfd,descripcion:'Folio: '+(g.folioBanco||'-'),folioBanco:g.folioBanco||'',creadoEn:new Date().toISOString()}));
+      let gRef=db.collection('gastos').doc();
+      let gData={concepto:g.concepto,tipo:g.tipo,monto:g.monto,fecha:gfd,descripcion:'Folio: '+(g.folioBanco||'-'),folioBanco:g.folioBanco||'',creadoEn:new Date().toISOString()};
+      ops.push(b=>b.set(gRef,gData));
       importados.push({tipo:'gasto',concepto:g.concepto,monto:g.monto});
       if (ops.length>=400) await flush();
     }
 
     // Pagos
-    for (var pi=0;pi<pagosAprobados.length;pi++) {
-      var p=pagosAprobados[pi]; var fd=normF(p.fecha);
+    for (let pi=0;pi<pagosAprobados.length;pi++) {
+      let p=pagosAprobados[pi]; let fd=normF(p.fecha);
       if (esDup(p.local,p.monto,fd)) { omitidos.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,motivo:'duplicado'}); continue; }
-      var ano=null; var am=fd.match(/^(\d{4})/); if(am) ano=parseInt(am[1]);
-      var res=buscarCargo(p.local,p.mesPago,ano);
+      let ano=null; let am=fd.match(/^(\d{4})/); if(am) ano=parseInt(am[1]);
+      let res=buscarCargo(p.local,p.mesPago,ano);
       if (!res.cargo) {
-        // Guardar en Firebase como pendiente manual
         errores.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,mesPago:p.mesPago||'',folio:p.folio||'',motivo:res.motivo,nota:res.nota||''});
-        var pRef=db.collection('conciliacion_mov_pendiente').doc();
-        ops.push(b=>b.set(pRef,{local:p.local,monto:p.monto,fecha:fd,mesPago:p.mesPago||'',folio:p.folio||'',motivo:res.motivo,nota:res.nota||'',creadoEn:new Date().toISOString()}));
-        if (ops.length>=400) await flush();
+        // Solo guardar como pendiente si no existe ya uno igual (misma clave local+monto+fecha)
+        let keyPend = p.local+'|'+String(p.monto)+'|'+fd;
+        if (!pendientesRegistrados[keyPend]) {
+          pendientesRegistrados[keyPend] = true;
+          let pRef=db.collection('conciliacion_mov_pendiente').doc();
+          let pData={local:p.local,monto:p.monto,fecha:fd,mesPago:p.mesPago||'',folio:p.folio||'',motivo:res.motivo,nota:res.nota||'',creadoEn:new Date().toISOString()};
+          ops.push(b=>b.set(pRef,pData));
+          if (ops.length>=400) await flush();
+        }
         continue;
       }
-      var notaFinal='Folio: '+(p.folio||'-')+' | Conciliado: '+new Date().toLocaleDateString('es-MX');
-      var cRef=db.collection('pagos').doc(res.cargo.id);
-      ops.push(b=>b.update(cRef,{estatus:'pagado',fechaPago:fd,metodoPago:'Transferencia',nota:notaFinal}));
-      // Actualizar mapa en memoria para que el siguiente pago del mismo local no reutilice este cargo
-      mapaExistentes[res.cargo.id].estatus='pagado';
-      mapaExistentes[res.cargo.id].fechaPago=fd;
-      // Registrar en anti-dup del lote
+      let notaFinal='Folio: '+(p.folio||'-')+' | Conciliado: '+new Date().toLocaleDateString('es-MX');
+      let cargoId=res.cargo.id;
+      let cRef=db.collection('pagos').doc(cargoId);
+      let updateData={estatus:'pagado',fechaPago:fd,metodoPago:'Transferencia',nota:notaFinal};
+      ops.push(b=>b.update(cRef,updateData));
+      // Actualizar mapa en memoria
+      mapaExistentes[cargoId].estatus='pagado';
+      mapaExistentes[cargoId].fechaPago=fd;
       pagadosEsteLote[p.local+'|'+String(p.monto)+'|'+fd]=true;
       importados.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd});
       if (ops.length>=400) await flush();
