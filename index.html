@@ -88,8 +88,8 @@ const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Ta
 
 // Cuotas fijas de mantenimiento por local
 const CUOTA_FIJA = {
-  'PB2': 4140,
-  'P8': 20000
+  'PB2': 4000,
+  'P8': 22400
   // Todos los demas: 2800
 };
 const getCuotaFija = uid => CUOTA_FIJA[uid] || 2800;
@@ -4303,7 +4303,7 @@ function App() {
       border: '1px solid #DDD6FE',
       color: '#5B21B6'
     }
-  }, "Genera automaticamente los cargos de ", /*#__PURE__*/React.createElement("strong", null, "Cuota de Mantenimiento"), " para los 87 locales. PB2: $4,140 | Piso 8: $20,000 | Resto: $2,800"), /*#__PURE__*/React.createElement("div", {
+  }, "Genera automaticamente los cargos de ", /*#__PURE__*/React.createElement("strong", null, "Cuota de Mantenimiento"), " para los 87 locales. PB2: $4,000 | Piso 8: $22,400 | Resto: $2,800"), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-2 gap-3"
   }, /*#__PURE__*/React.createElement(Lbl, {
     text: "Mes"
@@ -4327,9 +4327,9 @@ function App() {
     className: "bg-gray-50 rounded-lg p-3 text-xs text-gray-600"
   }, /*#__PURE__*/React.createElement("p", {
     className: "font-semibold mb-1"
-  }, "Se generaran ", unidades.length, " cargos:"), /*#__PURE__*/React.createElement("p", null, "87 locales x $2,800 = $243,600 + PB2 ($4,140) + Piso 8 ($20,000)"), /*#__PURE__*/React.createElement("p", {
+  }, "Se generaran ", unidades.length, " cargos:"), /*#__PURE__*/React.createElement("p", null, "85 locales x $2,800 = $238,000 + PB2 ($4,000) + Piso 8 ($22,400)"), /*#__PURE__*/React.createElement("p", {
     className: "font-bold mt-1"
-  }, "Total cuotas: $", (84 * 2800 + 4140 + 20000).toLocaleString('es-MX'))), /*#__PURE__*/React.createElement("button", {
+  }, "Total cuotas: $", (85 * 2800 + 4000 + 22400).toLocaleString('es-MX'))), /*#__PURE__*/React.createElement("button", {
     onClick: async () => {
       const ok = await generarCargosMes(cargosMes, cargosAno);
       if (ok) setMCargos(false);
