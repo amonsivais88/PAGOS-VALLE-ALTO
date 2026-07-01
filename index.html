@@ -1425,9 +1425,10 @@ function TabSaldos({
 }
 
 /* MODAL CONCILIACION BANCARIA */
-function ModalConciliacionMovimientos({ onClose, onLeerArchivo, onImportar, datos, tab, setTab, importando, resultado, setResultado }) {
+function ModalConciliacionMovimientos({ onClose, onLeerArchivo, onImportar, datos, tab, setTab, importando, resultado, setResultado, pendientes, onBorrarPendiente }) {
   var fmtM = function(n) { return '$'+Number(n||0).toLocaleString('es-MX',{minimumFractionDigits:2,maximumFractionDigits:2}); };
   var RE = React.createElement;
+  var pends = pendientes || [];
   var cnt = datos ? {pagos:datos.pagos.length, terminales:datos.terminales.length, gastos:datos.gastos.length, sinId:datos.sinId.length} : {};
   var badge = function(n,color) { return n>0 ? RE('span',{className:'ml-1 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold',style:{background:color}},n) : null; };
 
@@ -1460,14 +1461,27 @@ function ModalConciliacionMovimientos({ onClose, onLeerArchivo, onImportar, dato
             RE('p',{className:'font-semibold text-green-700 mb-2'},'\u2705 Importaci\u00f3n completada'),
             RE('p',{className:'text-sm text-green-600'},'Registros importados: '+resultado.importados.length),
             RE('p',{className:'text-sm text-orange-500'},'Omitidos (duplicados): '+resultado.omitidos.length),
-            resultado.errores.length>0 && RE('p',{className:'text-sm text-red-500'},'Requieren revisi\u00f3n manual: '+resultado.errores.length)
+            resultado.errores.length>0 && RE('p',{className:'text-sm text-red-500'},'Enviados a revisi\u00f3n manual: '+resultado.errores.length)
           ),
-          resultado.errores.length>0 && RE('div',{className:'bg-red-50 border border-red-100 rounded-xl p-4'},
-            RE('p',{className:'font-semibold text-red-700 mb-2'},'Registros sin conciliar (revisi\u00f3n manual):'),
-            RE('div',{className:'space-y-1 max-h-48 overflow-y-auto'},
-              resultado.errores.map(function(e,i){ return RE('div',{key:i,className:'text-xs text-red-600 bg-white rounded p-2 border border-red-100'},
-                'Local '+e.local+' | '+fmtM(e.monto)+' | '+e.fecha+' | '+(e.nota||e.motivo)
-              ); })
+          // Pendientes manuales guardados en Firebase
+          pends.length>0 && RE('div',{className:'bg-red-50 border border-red-200 rounded-xl p-4'},
+            RE('p',{className:'font-semibold text-red-700 mb-1'},'Pendientes de registro manual ('+pends.length+'):'),
+            RE('p',{className:'text-xs text-red-500 mb-3'},'Estos movimientos no pudieron conciliarse autom\u00e1ticamente. Resu\u00e9lvelos manualmente y presiona \u2715 para eliminarlos.'),
+            RE('div',{className:'space-y-1 max-h-52 overflow-y-auto'},
+              pends.map(function(s,i){
+                return RE('div',{key:i,className:'flex items-start justify-between bg-white rounded p-2 border border-red-100 text-xs'},
+                  RE('div',{},
+                    RE('span',{className:'font-medium text-red-700'},'Local '+s.local+' | '+fmtM(s.monto)+' | '+s.fecha),
+                    s.mesPago && RE('span',{className:'ml-2 bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px]'},s.mesPago),
+                    RE('p',{className:'text-gray-500 mt-0.5'},s.nota||s.motivo)
+                  ),
+                  RE('button',{
+                    onClick:function(){onBorrarPendiente(s.id);},
+                    className:'ml-2 mt-0.5 text-red-400 hover:text-red-600 font-bold text-base leading-none flex-shrink-0',
+                    title:'Marcar como resuelto y eliminar'
+                  },'\u00d7')
+                );
+              })
             )
           ),
           RE('button',{onClick:function(){setResultado(null);},className:'w-full py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium'},'Importar otro archivo')
@@ -2054,6 +2068,7 @@ function App() {
   const [cmDatos, setCmDatos] = useState(null);
   const [cmImportando, setCmImportando] = useState(false);
   const [cmResultado, setCmResultado] = useState(null);
+  const [pendMovEVA, setPendMovEVA] = useState([]);
   const [mConfPago, setMConfPago] = useState(false);
   const [confPagoId, setConfPagoId] = useState(null);
   const [confPagoFecha, setConfPagoFecha] = useState('');
@@ -2155,6 +2170,11 @@ function App() {
               id: d.id,
               ...d.data()
             })));
+        } catch (e) {}
+        // Cargar pendientes manuales de conciliacion movimientos EVA
+        try {
+          const snapMovPend = await db.collection('conciliacion_mov_pendiente').get();
+          setPendMovEVA(snapMovPend.empty ? [] : snapMovPend.docs.map(d => ({id:d.id,...d.data()})));
         } catch (e) {}
         setFbReady(true);
       } catch (e) {
@@ -2299,11 +2319,25 @@ function App() {
     const MESES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     const mesNum = nombre => { if (!nombre) return null; var i=MESES.findIndex(m=>m.toLowerCase()===String(nombre).trim().toLowerCase()); return i>=0?i+1:null; };
     const normF = f => { if (!f) return ''; var s=String(f).trim(); var m=s.match(/^(\d{2})-(\d{2})-(\d{4})$/); if(m) return m[3]+'-'+m[2]+'-'+m[1]; return s; };
+
+    // Cargar TODOS los pagos existentes una sola vez
     const snapP = await db.collection('pagos').get();
-    const existentes = snapP.docs.map(d=>({id:d.id,...d.data()}));
-    const esDup = (uid,monto,fecha) => existentes.some(p=>p.unidadId===uid&&Math.abs(Number(p.monto)-Number(monto))<0.01&&p.fechaPago===fecha&&!p.cancelado);
+    // Mapa mutable: id -> objeto (para actualizar estado en memoria conforme se procesa)
+    const mapaExistentes = {};
+    snapP.docs.forEach(d => { mapaExistentes[d.id] = {id:d.id,...d.data()}; });
+    const existentes = () => Object.values(mapaExistentes);
+
+    // Anti-duplicado: local + monto + fechaPago YA registrada (en Firebase o en este lote)
+    const pagadosEsteLote = {}; // key: uid+'|'+monto+'|'+fecha
+    const esDup = (uid,monto,fecha) => {
+      var key = uid+'|'+String(monto)+'|'+fecha;
+      if (pagadosEsteLote[key]) return true;
+      return existentes().some(p=>p.unidadId===uid&&Math.abs(Number(p.monto)-Number(monto))<0.01&&p.fechaPago===fecha&&!p.cancelado);
+    };
+
     const buscarCargo = (uid,mesPagoNombre,anoRef) => {
-      var candidatos = existentes.filter(c=>c.unidadId===uid&&c.estatus==='pendiente'&&c.tipoMov==='cargo'&&!c.cancelado);
+      // Solo pendientes que NO hayan sido ya asignados en este lote
+      var candidatos = existentes().filter(c=>c.unidadId===uid&&c.estatus==='pendiente'&&c.tipoMov==='cargo'&&!c.cancelado);
       if (candidatos.length===0) return {cargo:null,motivo:'sin-pendientes'};
       var mn = mesNum(mesPagoNombre);
       if (mn) {
@@ -2315,30 +2349,46 @@ function App() {
       candidatos.sort((a,b)=>String(a.fecha||a.fechaVencimiento||'').localeCompare(String(b.fecha||b.fechaVencimiento||'')));
       return {cargo:candidatos[0],motivo:'ok'};
     };
+
     const importados=[], omitidos=[], errores=[];
     var ops=[];
     const flush = async () => { if (!ops.length) return; var b=db.batch(); ops.forEach(fn=>fn(b)); await b.commit(); ops=[]; };
+
+    // Gastos
     const snapG = await db.collection('gastos').get();
     const gastosEx = snapG.docs.map(d=>({id:d.id,...d.data()}));
     for (var gi=0;gi<gastosAprobados.length;gi++) {
-      var g=gastosAprobados[gi]; var fd=normF(g.fecha);
-      var dupG=gastosEx.some(ge=>ge.concepto===g.concepto&&Math.abs(Number(ge.monto)-Number(g.monto))<0.01&&ge.fecha===fd);
+      var g=gastosAprobados[gi]; var gfd=normF(g.fecha);
+      var dupG=gastosEx.some(ge=>ge.concepto===g.concepto&&Math.abs(Number(ge.monto)-Number(g.monto))<0.01&&ge.fecha===gfd);
       if (dupG) { omitidos.push({tipo:'gasto',concepto:g.concepto,monto:g.monto,motivo:'duplicado'}); continue; }
-      var ref=db.collection('gastos').doc();
-      ops.push(b=>b.set(ref,{concepto:g.concepto,tipo:g.tipo,monto:g.monto,fecha:fd,descripcion:'Folio: '+(g.folioBanco||'-'),folioBanco:g.folioBanco||'',creadoEn:new Date().toISOString()}));
+      var gRef=db.collection('gastos').doc();
+      ops.push(b=>b.set(gRef,{concepto:g.concepto,tipo:g.tipo,monto:g.monto,fecha:gfd,descripcion:'Folio: '+(g.folioBanco||'-'),folioBanco:g.folioBanco||'',creadoEn:new Date().toISOString()}));
       importados.push({tipo:'gasto',concepto:g.concepto,monto:g.monto});
       if (ops.length>=400) await flush();
     }
+
+    // Pagos
     for (var pi=0;pi<pagosAprobados.length;pi++) {
       var p=pagosAprobados[pi]; var fd=normF(p.fecha);
       if (esDup(p.local,p.monto,fd)) { omitidos.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,motivo:'duplicado'}); continue; }
       var ano=null; var am=fd.match(/^(\d{4})/); if(am) ano=parseInt(am[1]);
       var res=buscarCargo(p.local,p.mesPago,ano);
-      if (!res.cargo) { errores.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,motivo:res.motivo,nota:res.nota}); continue; }
+      if (!res.cargo) {
+        // Guardar en Firebase como pendiente manual
+        errores.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd,mesPago:p.mesPago||'',folio:p.folio||'',motivo:res.motivo,nota:res.nota||''});
+        var pRef=db.collection('conciliacion_mov_pendiente').doc();
+        ops.push(b=>b.set(pRef,{local:p.local,monto:p.monto,fecha:fd,mesPago:p.mesPago||'',folio:p.folio||'',motivo:res.motivo,nota:res.nota||'',creadoEn:new Date().toISOString()}));
+        if (ops.length>=400) await flush();
+        continue;
+      }
       var notaFinal='Folio: '+(p.folio||'-')+' | Conciliado: '+new Date().toLocaleDateString('es-MX');
       var cRef=db.collection('pagos').doc(res.cargo.id);
       ops.push(b=>b.update(cRef,{estatus:'pagado',fechaPago:fd,metodoPago:'Transferencia',nota:notaFinal}));
-      res.cargo.estatus='pagado';
+      // Actualizar mapa en memoria para que el siguiente pago del mismo local no reutilice este cargo
+      mapaExistentes[res.cargo.id].estatus='pagado';
+      mapaExistentes[res.cargo.id].fechaPago=fd;
+      // Registrar en anti-dup del lote
+      pagadosEsteLote[p.local+'|'+String(p.monto)+'|'+fd]=true;
       importados.push({tipo:'pago',local:p.local,monto:p.monto,fecha:fd});
       if (ops.length>=400) await flush();
     }
@@ -3715,7 +3765,9 @@ function App() {
     style: { background: '#6B21A8' }
   }, /*#__PURE__*/React.createElement(I.Sheet, {
     sz: 15
-  }), "Conciliar Movimientos")), /*#__PURE__*/React.createElement("div", {
+  }), "Conciliar Movimientos", pendMovEVA.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bg-red-400 text-white text-[10px] px-1.5 py-0.5 rounded-full"
+  }, pendMovEVA.length))), /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-5 py-3 border-b border-gray-200"
@@ -4281,7 +4333,16 @@ function App() {
       var validos = cmDatos.pagos.filter(function(p){return p.localValido;});
       if (!confirm('Confirmar importacion?\n\nPagos: '+validos.length+'\nGastos: '+cmDatos.gastos.length+'\n\nLos duplicados se omitiran automaticamente.')) return;
       setCmImportando(true);
-      try { var r = await importarMovimientosEVA(validos, cmDatos.gastos); setCmResultado(r); setCmDatos(null); }
+      try {
+        var r = await importarMovimientosEVA(validos, cmDatos.gastos);
+        setCmResultado(r);
+        setCmDatos(null);
+        // Recargar pendientes manuales desde Firebase
+        if (dbRef.current) {
+          var snapMP = await dbRef.current.collection('conciliacion_mov_pendiente').get();
+          setPendMovEVA(snapMP.empty ? [] : snapMP.docs.map(function(d){return {id:d.id,...d.data()};}));
+        }
+      }
       catch(err) { alert('Error: ' + err.message); }
       finally { setCmImportando(false); }
     },
@@ -4290,7 +4351,13 @@ function App() {
     setTab: setCmTab,
     importando: cmImportando,
     resultado: cmResultado,
-    setResultado: setCmResultado
+    setResultado: setCmResultado,
+    pendientes: pendMovEVA,
+    onBorrarPendiente: async function(id) {
+      if (!confirm('Marcar este pendiente como resuelto y eliminarlo?')) return;
+      if (dbRef.current) await dbRef.current.collection('conciliacion_mov_pendiente').doc(id).delete();
+      setPendMovEVA(function(prev){return prev.filter(function(p){return p.id!==id;});});
+    }
   }), mCargos && /*#__PURE__*/React.createElement(Modal, {
     title: "Generar Cargos Fijos del Mes",
     onClose: () => setMCargos(false)
