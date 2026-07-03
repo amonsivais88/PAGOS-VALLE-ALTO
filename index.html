@@ -152,16 +152,21 @@ const fmt = n => '$' + Number(n).toLocaleString('es-MX', {
 // Convierte fecha de Excel (n mero serial o string) a YYYY-MM-DD
 const excelFecha = v => {
   if (!v) return new Date().toISOString().split('T')[0];
-  // Si ya es string con formato fecha (contiene - o /)
+  // Si ya es string con formato fecha
   if (typeof v === 'string' && (v.includes('-') || v.includes('/'))) {
-    const parts = v.includes('-') ? v.split('-') : v.split('/');
+    const sep = v.includes('-') ? '-' : '/';
+    const parts = v.split(sep);
     if (parts[0].length === 4) return v.split('T')[0]; // ya es YYYY-MM-DD
-    // es DD/MM/YYYY o MM/DD/YYYY
+    // Es DD-MM-YYYY o DD/MM/YYYY: partes[0]=dia, partes[1]=mes, partes[2]=ano
+    if (parts.length === 3 && parts[2].length === 4) {
+      return parts[2] + '-' + parts[1].padStart(2,'0') + '-' + parts[0].padStart(2,'0');
+    }
+    // Intento genérico
     const d = new Date(v);
     if (!isNaN(d)) return d.toISOString().split('T')[0];
     return v;
   }
-  // Si es n mero serial de Excel (ej. 46122)
+  // Si es número serial de Excel (ej. 46122)
   const num = Number(v);
   if (!isNaN(num) && num > 40000) {
     const d = new Date((num - 25569) * 86400 * 1000);
@@ -2199,6 +2204,35 @@ function App() {
           setPendMovEVA(snapMovPend.empty ? [] : snapMovPend.docs.map(d => ({id:d.id,...d.data()})));
         } catch (e) {}
         setFbReady(true);
+        // Auto-generar cargos fijos del mes actual si no existen
+        try {
+          const hoyAuto = new Date();
+          const mesAuto = hoyAuto.getMonth() + 1;
+          const anoAuto = hoyAuto.getFullYear();
+          const mesStrAuto = String(mesAuto).padStart(2,'0');
+          const fechaAutoCheck = anoAuto + '-' + mesStrAuto + '-01';
+          const snapAuto = await db.collection('pagos').where('concepto','==','Cuota de Mantenimiento').where('tipoMov','==','cargo').where('fecha','==',fechaAutoCheck).get();
+          if (snapAuto.empty) {
+            // No existen cargos de este mes -> generarlos automaticamente
+            const undsAuto = generarUnidades();
+            const bAuto = db.batch();
+            const folioAuto = 'MNT-' + anoAuto + mesStrAuto;
+            const ultimoDiaAuto = new Date(anoAuto, mesAuto, 0).getDate();
+            const fechaVencAuto = anoAuto + '-' + mesStrAuto + '-' + String(ultimoDiaAuto).padStart(2,'0');
+            undsAuto.forEach((u, idx) => {
+              bAuto.set(db.collection('pagos').doc(), {
+                unidadId: u.id, concepto: 'Cuota de Mantenimiento',
+                monto: getCuotaFija(u.id), fecha: fechaAutoCheck,
+                fechaVencimiento: fechaVencAuto, tipoMov: 'cargo',
+                estatus: 'pendiente', cancelado: false,
+                createdAt: new Date().toISOString(),
+                folio: folioAuto + '-' + String(idx+1).padStart(3,'0')
+              });
+            });
+            await bAuto.commit();
+            console.log('[EVA] Cargos de ' + MESES_L[mesAuto-1] + ' ' + anoAuto + ' generados automaticamente');
+          }
+        } catch(eAuto) { console.warn('[EVA] Auto-cargos:', eAuto.message); }
       } catch (e) {
         setFbError('No se pudo conectar a Firebase. Revisa firebaseConfig.');
       }
@@ -2480,32 +2514,51 @@ function App() {
   };
 
   // Aplica un abono sobre los cargos pendientes del local automaticamente
-  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db) => {
-    // Obtener cargos pendientes del local ordenados por fecha
-    const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', '==', 'pendiente').where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
-    if (snap.empty) return 0; // sin pendientes - el abono queda como saldo a favor
+  // Prioridad de aplicacion: 1=Mantenimiento, 2=Servicios, 3=Accesorios (resto)
+  const prioridadConcepto = concepto => {
+    if (!concepto) return 3;
+    const c = String(concepto).toLowerCase();
+    if (c.includes('mantenimiento')) return 1;
+    if (c.includes('servicio')) return 2;
+    return 3;
+  };
 
-    // Ordenar por fecha ascendente (pagar primero los mas antiguos)
-    const cargos = snap.docs.map(d => ({
-      id: d.id,
-      ...d.data()
-    })).sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
+  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago) => {
+    const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', '==', 'pendiente').where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
+    if (snap.empty) return 0;
+    // Ordenar por prioridad de concepto, luego por fecha ascendente
+    const cargos = snap.docs.map(d => ({id: d.id, ...d.data()})).sort((a, b) => {
+      const pA = prioridadConcepto(a.concepto), pB = prioridadConcepto(b.concepto);
+      if (pA !== pB) return pA - pB;
+      return String(a.fecha || '').localeCompare(String(b.fecha || ''));
+    });
     var montoRestante = montoAbono;
     var cargosLiquidados = 0;
+    const hoy = fechaPago || new Date().toISOString().split('T')[0];
+    const metodo = metodoPago || 'Transferencia';
     for (var i = 0; i < cargos.length; i++) {
       if (montoRestante <= 0) break;
       const cargo = cargos[i];
-      if (montoRestante >= cargo.monto) {
-        // El abono cubre este cargo completo
+      const saldoPendiente = Number(cargo.saldoPendiente || cargo.monto);
+      if (montoRestante >= saldoPendiente) {
         batch.update(db.collection('pagos').doc(cargo.id), {
-          estatus: 'pagado',
-          updatedAt: new Date().toISOString(),
-          nota: 'Liquidado con abono conciliado'
+          estatus: 'pagado', fechaPago: hoy, metodoPago: metodo,
+          montoPagado: Number(cargo.monto), saldoPendiente: 0,
+          updatedAt: new Date().toISOString(), nota: 'Liquidado con abono'
         });
-        montoRestante -= cargo.monto;
+        montoRestante -= saldoPendiente;
         cargosLiquidados++;
+      } else if (montoRestante > 0) {
+        // Pago parcial: actualizar saldo sin marcar como pagado
+        const montoPagadoPrev = Number(cargo.montoPagado || 0);
+        batch.update(db.collection('pagos').doc(cargo.id), {
+          estatus: 'parcial', fechaPago: hoy, metodoPago: metodo,
+          montoPagado: montoPagadoPrev + montoRestante,
+          saldoPendiente: saldoPendiente - montoRestante,
+          updatedAt: new Date().toISOString(), nota: 'Pago parcial'
+        });
+        montoRestante = 0;
       }
-      // Si no alcanza para el cargo completo, no marcar como pagado (pago parcial)
     }
     return cargosLiquidados;
   };
