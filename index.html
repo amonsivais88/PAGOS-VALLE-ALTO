@@ -85,6 +85,17 @@ const PIE_COLORS = ['#0B2545', '#C9A961', '#2C2F36', '#1B7F5A', '#E07B39', '#0E6
 /* Conceptos que se agrupan en "Caj n, Bodega y Tarjetas" en la dona del dashboard */
 const CONCEPTOS_CAJON = ['Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Otros'];
 const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Cuota Extraordinaria', 'Otros'];
+// Colores fijos por concepto para coherencia visual
+const CONCEPTO_COLOR = {
+  'Cuota de Mantenimiento': '#0B2545', // azul marino
+  'Servicios':              '#C9A961', // dorado
+  'Estacionamiento':        '#1B7F5A', // verde
+  'Tarjetas de Acceso':     '#E07B39', // naranja
+  'Bodegas':                '#0E6BA8', // azul claro
+  'Cuota Extraordinaria':   '#6B4E71', // morado
+  'Otros':                  '#64748B', // gris
+};
+const getConceptoColor = c => CONCEPTO_COLOR[c] || '#64748B';
 
 // Cuotas fijas de mantenimiento por local
 const CUOTA_FIJA = {
@@ -815,56 +826,23 @@ function ModalImport({
       });
       return row;
     });
-    // Hoja 2: ABONOS (pagos recibidos de condominios)
-    // Una fila por pago recibido - formato vertical
-    const datosAbonos = [{
-      Locales: '101',
-      Tipo: 'abono',
-      Concepto: 'Pago mensual',
-      Monto: '',
-      Fecha: hoy,
-      Folio: ''
-    }, {
-      Locales: '102',
-      Tipo: 'abono',
-      Concepto: 'Pago mensual',
-      Monto: '',
-      Fecha: hoy,
-      Folio: ''
-    }, {
-      Locales: '103',
-      Tipo: 'abono',
-      Concepto: 'Pago mensual',
-      Monto: '',
-      Fecha: hoy,
-      Folio: ''
-    }];
     const wb = window.XLSX.utils.book_new();
     // Hoja de cargos variables (horizontal)
     const wsCargos = window.XLSX.utils.json_to_sheet(datosCargos);
     window.XLSX.utils.book_append_sheet(wb, wsCargos, 'Cargos Variables');
-    // Hoja de abonos (vertical)
-    const wsAbonos = window.XLSX.utils.json_to_sheet(datosAbonos);
-    window.XLSX.utils.book_append_sheet(wb, wsAbonos, 'Abonos');
     // Hoja de instrucciones
     const instrucciones = [{
-      Instruccion: 'HOJA 1 - Cargos Variables: llena los montos de conceptos variables (Servicios agua/luz, estacionamiento, etc.)'
+      Instruccion: 'HOJA 1 - Cargos Variables: llena los montos de conceptos variables (Servicios, Estacionamiento, etc.)'
     }, {
       Instruccion: 'Los montos vacios se ignoraran al importar'
     }, {
-      Instruccion: 'La Cuota de Mantenimiento NO va aqui - se genera automaticamente con el boton "Generar Cargos del Mes"'
+      Instruccion: 'La Cuota de Mantenimiento NO va aqui - se genera automaticamente al cargar la app'
     }, {
-      Instruccion: 'HOJA 2 - Abonos: registra los pagos recibidos de cada condomino'
-    }, {
-      Instruccion: 'Agrega una fila por cada pago recibido'
-    }, {
-      Instruccion: 'Tipo siempre debe ser: abono'
-    }, {
-      Instruccion: 'El sistema calculara automaticamente si hay saldo a favor'
+      Instruccion: 'Los pagos se registran con el boton Procesar Movimientos del Mes (Excel bancario)'
     }];
     const wsInstr = window.XLSX.utils.json_to_sheet(instrucciones);
     window.XLSX.utils.book_append_sheet(wb, wsInstr, 'Instrucciones');
-    window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_pagos.xlsx');
+    window.XLSX.writeFile(wb, 'Plantilla_ValleAlto_cargos.xlsx');
   };
   const leer = async e => {
     setErr('');
@@ -3777,7 +3755,7 @@ function App() {
     dataKey: "value"
   }, dataDona.map((_, i) => /*#__PURE__*/React.createElement(Cell, {
     key: i,
-    fill: PIE_COLORS[i % PIE_COLORS.length]
+    fill: getConceptoColor(k)
   }))), /*#__PURE__*/React.createElement(Tooltip, {
     formatter: v => `$${Number(v).toLocaleString('es-MX')}`,
     contentStyle: {
@@ -3841,25 +3819,13 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement(I.Up, {
     sz: 15
-  }), "Importar Excel"), /*#__PURE__*/React.createElement("button", {
-    onClick: () => setMConciliacion(true),
-    className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:shadow-md transition",
-    style: {
-      background: '#0E6BA8'
-    }
-  }, /*#__PURE__*/React.createElement(I.Sheet, {
-    sz: 15
-  }), "Conciliar Banco", pendientesConcil.length > 0 && /*#__PURE__*/React.createElement("span", {
-    className: "bg-orange-400 text-white text-[10px] px-1.5 py-0.5 rounded-full"
-  }, pendientesConcil.length)), /*#__PURE__*/React.createElement("button", {
+  }), "Importar Cargos Variables"), /*#__PURE__*/React.createElement("button", {
     onClick: function() { setCmDatos(null); setCmResultado(null); setCmTab('pagos'); setMConcilMov(true); },
     className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:shadow-md transition",
-    style: { background: '#6B21A8' }
+    style: { background: '#0B2545' }
   }, /*#__PURE__*/React.createElement(I.Sheet, {
     sz: 15
-  }), "Conciliar Movimientos", pendMovEVA.length > 0 && /*#__PURE__*/React.createElement("span", {
-    className: "bg-red-400 text-white text-[10px] px-1.5 py-0.5 rounded-full"
-  }, pendMovEVA.length))), /*#__PURE__*/React.createElement("div", {
+  }), "Procesar Movimientos del Mes"), /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-5 py-3 border-b border-gray-200"
