@@ -172,12 +172,12 @@ const excelFecha = v => {
     if (parts.length === 3 && parts[2].length === 4) {
       return parts[2] + '-' + parts[1].padStart(2,'0') + '-' + parts[0].padStart(2,'0');
     }
-    // Intento genérico
+    // Intento generico
     const d = new Date(v);
     if (!isNaN(d)) return d.toISOString().split('T')[0];
     return v;
   }
-  // Si es número serial de Excel (ej. 46122)
+  // Si es numero serial de Excel (ej. 46122)
   const num = Number(v);
   if (!isNaN(num) && num > 40000) {
     const d = new Date((num - 25569) * 86400 * 1000);
@@ -1438,7 +1438,7 @@ function ModalConciliacionMovimientos({ onClose, onLeerArchivo, onImportar, dato
           RE('p',{className:'text-xs text-gray-400 mt-1'},'Columnas requeridas: FECHA, LOCAL, DESGLOSE, MES DE PAGO, CONCEPTO DE GASTO, TIPO DE GASTO')
         ),
 
-        // Resultado de importación
+        // Resultado de importacion
         resultado && RE('div',{className:'space-y-4'},
           RE('div',{className:'bg-green-50 border border-green-200 rounded-xl p-4'},
             RE('p',{className:'font-semibold text-green-700 mb-2'},'\u2705 Importaci\u00f3n completada'),
@@ -1470,7 +1470,7 @@ function ModalConciliacionMovimientos({ onClose, onLeerArchivo, onImportar, dato
           RE('button',{onClick:function(){setResultado(null);},className:'w-full py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium'},'Importar otro archivo')
         ),
 
-        // Tabla de revisión
+        // Tabla de revision
         datos && !resultado && RE('div',{},
 
           // KPIs
@@ -2238,7 +2238,7 @@ function App() {
 
   // === CONCILIACION MOVIMIENTOS EVA ===
   // ============================================================
-  // BLOQUE A — estado (va junto a const [mConciliacion,...])
+  // BLOQUE A -- estado (va junto a const [mConciliacion,...])
   // ============================================================
   // const [mConcilMov, setMConcilMov] = useState(false);
   // const [cmTab, setCmTab] = useState('pagos');
@@ -2247,7 +2247,7 @@ function App() {
   // const [cmResultado, setCmResultado] = useState(null);
 
   // ============================================================
-  // BLOQUE B — función leerMovimientosEVA (va en /* ACCIONES */)
+  // BLOQUE B -- funcion leerMovimientosEVA (va en /* ACCIONES */)
   // ============================================================
   const leerMovimientosEVA = async file => {
     await loadJS('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
@@ -2584,7 +2584,7 @@ function App() {
         await b3.commit();
       }
       // Eliminar de Firebase los pendientes que ya fueron importados
-      // (los que NO están en el array 'pendientes' pero SÍ estaban guardados)
+      // (los que NO estan en el array 'pendientes' pero SI estaban guardados)
       const pendientesIds = new Set((pendientes||[]).map(p => p.id).filter(Boolean));
       const aEliminar = pendientesConcil.filter(p => p.id && !pendientesIds.has(p.id));
       if (aEliminar.length > 0) {
@@ -3825,7 +3825,7 @@ function App() {
     style: { background: '#0B2545' }
   }, /*#__PURE__*/React.createElement(I.Sheet, {
     sz: 15
-  }), "Procesar Movimientos del Mes"), /*#__PURE__*/React.createElement("div", {
+  }), "Procesar Movimientos del Mes")), /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden"
   }, /*#__PURE__*/React.createElement("div", {
     className: "px-5 py-3 border-b border-gray-200"
@@ -3930,7 +3930,7 @@ function App() {
       onClick: () => {
         if (p.cancelado) return;
         if (p.estatus !== 'pagado') {
-          // Pendiente/Vencido -> abrir modal para confirmar fecha y método
+          // Pendiente/Vencido -> abrir modal para confirmar fecha y metodo
           setConfPagoId(p.id);
           setConfPagoFecha(new Date().toISOString().split('T')[0]);
           setConfPagoMetodo('Transferencia');
