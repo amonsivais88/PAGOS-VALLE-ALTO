@@ -3829,9 +3829,9 @@ function App() {
     outerRadius: 85,
     paddingAngle: 2,
     dataKey: "value"
-  }, dataDona.map((_, i) => /*#__PURE__*/React.createElement(Cell, {
+  }, dataDona.map((entry, i) => /*#__PURE__*/React.createElement(Cell, {
     key: i,
-    fill: getConceptoColor(k)
+    fill: getConceptoColor(entry.name)
   }))), /*#__PURE__*/React.createElement(Tooltip, {
     formatter: v => `$${Number(v).toLocaleString('es-MX')}`,
     contentStyle: {
