@@ -3007,8 +3007,18 @@ function App() {
         if (tipo !== 'ambos' && p.estatus !== tipo) return false;
         return true;
       });
-      const tp = movs.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
-      const td = movs.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+      // Total abonado: pagos completos + montoPagado de parciales
+      const tp = movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
+        if (p.estatus === 'pagado') return s + Number(p.monto);
+        if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+        return s;
+      }, 0);
+      // Total pendiente real: pendientes completos + saldoPendiente de parciales
+      const td = movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
+        if (p.estatus === 'pendiente') return s + Number(p.monto);
+        if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
+        return s;
+      }, 0);
       docLocal.setFontSize(11);
       docLocal.setTextColor(11, 37, 69);
       docLocal.text('Local / Unidad: ' + uid, 14, startY);
@@ -3018,7 +3028,15 @@ function App() {
       docLocal.autoTable({
         startY: startY + 10,
         head: [['Fecha', 'Concepto', 'Folio', 'Monto', 'Estatus']],
-        body: movs.length > 0 ? movs.map(p => [p.fecha, p.concepto, p.folio, fmt(p.monto), p.estatus.toUpperCase()]) : [[' ', 'Sin movimientos en el per odo', ' ', ' ', ' ']],
+        body: movs.length > 0 ? movs.map(p => {
+          let montoDisplay = fmt(p.monto);
+          let estatusDisplay = (p.estatus || '').toUpperCase();
+          if (p.estatus === 'parcial') {
+            montoDisplay = fmt(p.saldoPendiente || 0) + ' (abono: ' + fmt(p.montoPagado || 0) + ')';
+            estatusDisplay = 'PARCIAL';
+          }
+          return [p.fecha || '', p.concepto || '', p.folio || 'NA', montoDisplay, estatusDisplay];
+        }) : [[' ', 'Sin movimientos en el periodo', ' ', ' ', ' ']],
         headStyles: {
           fillColor: [11, 37, 69],
           textColor: 255,
@@ -3040,35 +3058,118 @@ function App() {
         }
       });
       const fy = docLocal.lastAutoTable.finalY + 6;
+
+      // ── CUADRO DE TOTALES (orden logico) ──────────────────────────────
+      const totalCargos = movs.filter(p => p.tipoMov === 'cargo')
+        .reduce((s, p) => s + Number(p.monto), 0);
+      const altoCuadro = tipo === 'ambos' ? 38 : 18;
       docLocal.setFillColor(244, 245, 247);
-      docLocal.rect(110, fy, 86, tipo === 'ambos' ? 28 : 18, 'F');
+      docLocal.rect(110, fy, 86, altoCuadro, 'F');
       docLocal.setFontSize(9);
-      docLocal.setTextColor(40, 40, 40);
-      if (tipo !== 'pendiente') {
-        docLocal.text('TOTAL PAGADO:', 114, fy + 7);
-        docLocal.setTextColor(27, 127, 90);
-        docLocal.text(fmt(tp), 192, fy + 7, {
-          align: 'right'
-        });
-      }
-      if (tipo !== 'pagado') {
-        const y = tipo === 'ambos' ? fy + 14 : fy + 7;
-        docLocal.setTextColor(40, 40, 40);
-        docLocal.text('TOTAL PENDIENTE:', 114, y);
-        docLocal.setTextColor(166, 39, 58);
-        docLocal.text(fmt(td), 192, y, {
-          align: 'right'
-        });
-      }
+
       if (tipo === 'ambos') {
+        // Linea 1: TOTAL CARGADO
+        docLocal.setTextColor(80, 80, 80);
+        docLocal.text('TOTAL CARGADO:', 114, fy + 8);
+        docLocal.setTextColor(11, 37, 69);
+        docLocal.text(fmt(totalCargos), 192, fy + 8, {align: 'right'});
+        // Linea 2: TOTAL ABONADO
+        docLocal.setTextColor(80, 80, 80);
+        docLocal.text('TOTAL ABONADO:', 114, fy + 17);
+        docLocal.setTextColor(27, 127, 90);
+        docLocal.text('- ' + fmt(tp), 192, fy + 17, {align: 'right'});
+        // Separador
+        docLocal.setDrawColor(200, 200, 200);
+        docLocal.line(114, fy + 21, 196, fy + 21);
+        // Linea 3: SALDO ACTUAL (en negrita visual)
         docLocal.setTextColor(11, 37, 69);
         docLocal.setFontSize(10);
-        docLocal.text('SALDO ACTUAL:', 114, fy + 22);
-        docLocal.text(fmt(td), 192, fy + 22, {
-          align: 'right'
-        });
+        docLocal.text('SALDO ACTUAL:', 114, fy + 30);
+        docLocal.setTextColor(td > 0 ? 166 : 27, td > 0 ? 39 : 127, td > 0 ? 58 : 90);
+        docLocal.text(fmt(td), 192, fy + 30, {align: 'right'});
+      } else if (tipo !== 'pagado') {
+        docLocal.setTextColor(80, 80, 80);
+        docLocal.text('TOTAL PENDIENTE:', 114, fy + 7);
+        docLocal.setTextColor(166, 39, 58);
+        docLocal.text(fmt(td), 192, fy + 7, {align: 'right'});
+      } else {
+        docLocal.setTextColor(80, 80, 80);
+        docLocal.text('TOTAL PAGADO:', 114, fy + 7);
+        docLocal.setTextColor(27, 127, 90);
+        docLocal.text(fmt(tp), 192, fy + 7, {align: 'right'});
       }
-      startY = fy + 38;
+
+      // ── TARJETAS DE DESGLOSE POR CONCEPTO (solo si hay pendientes) ────
+      if (td > 0) {
+        const tyCards = fy + altoCuadro + 10;
+        docLocal.setFontSize(9);
+        docLocal.setTextColor(11, 37, 69);
+        docLocal.text('DETALLE DE SALDOS PENDIENTES:', 14, tyCards);
+
+        // Agrupar pendientes por concepto
+        const grupos = {};
+        movs.filter(p => p.tipoMov === 'cargo').forEach(p => {
+          const est = p.estatus;
+          if (est !== 'pendiente' && est !== 'parcial') return;
+          const conc = p.concepto || 'Otros';
+          const saldo = est === 'parcial' ? Number(p.saldoPendiente || 0) : Number(p.monto);
+          const fechaLabel = (p.fecha || '').slice(0, 7); // YYYY-MM
+          if (!grupos[conc]) grupos[conc] = {total: 0, periodos: []};
+          grupos[conc].total += saldo;
+          if (fechaLabel && !grupos[conc].periodos.includes(fechaLabel))
+            grupos[conc].periodos.push(fechaLabel);
+        });
+
+        // Colores por concepto
+        const colorMap = {
+          'Cuota de Mantenimiento': [11, 37, 69],
+          'Servicios': [120, 83, 10],
+          'Estacionamiento': [27, 127, 90],
+          'Tarjetas de Acceso': [180, 60, 20],
+          'Bodegas': [14, 107, 168],
+          'Cuota Extraordinaria': [107, 78, 113],
+        };
+
+        const conceptos = Object.keys(grupos);
+        const cardW = 180 / Math.min(conceptos.length, 4);
+        const cardH = 22;
+        let cx = 14;
+        let cardRow = 0;
+
+        conceptos.forEach((conc, idx) => {
+          if (idx > 0 && idx % 4 === 0) { cx = 14; cardRow++; }
+          const cy = tyCards + 5 + cardRow * (cardH + 4);
+          const col = colorMap[conc] || [80, 80, 80];
+
+          // Fondo de la tarjeta
+          docLocal.setFillColor(...col);
+          docLocal.roundedRect(cx, cy, cardW - 3, cardH, 2, 2, 'F');
+
+          // Texto concepto
+          docLocal.setFontSize(7);
+          docLocal.setTextColor(255, 255, 255);
+          const label = conc.length > 22 ? conc.slice(0, 20) + '...' : conc;
+          docLocal.text(label, cx + 3, cy + 7);
+
+          // Monto
+          docLocal.setFontSize(10);
+          docLocal.text(fmt(grupos[conc].total), cx + cardW - 6, cy + 15, {align: 'right'});
+
+          // Periodo
+          docLocal.setFontSize(6);
+          const periodoLabel = grupos[conc].periodos.map(p => {
+            const parts = p.split('-');
+            return (MESES_S[parseInt(parts[1])-1] || '') + ' ' + parts[0];
+          }).join(', ');
+          docLocal.text(periodoLabel, cx + 3, cy + 19);
+
+          cx += cardW;
+        });
+
+        startY = tyCards + 5 + (cardRow + 1) * (cardH + 4) + 8;
+      } else {
+        startY = fy + altoCuadro + 8;
+      }
     docLocal.setFontSize(8);
     docLocal.setTextColor(120, 120, 120);
     docLocal.text('Documento oficial Administraci n Edificio Valle Alto.', 14, 285);
