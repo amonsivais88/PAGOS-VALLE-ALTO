@@ -2452,15 +2452,17 @@ function App() {
   // Generar cargos fijos del mes autom ticamente
   const generarCargosMes = async (mes, ano) => {
     if (!dbRef.current || !esAdmin) return;
+    if (syncing) return; // proteccion contra doble click
+    setSyncing(true); // deshabilitar boton inmediatamente
     const mesStr = String(mes).padStart(2, '0');
     const fechaCargo = ano + '-' + mesStr + '-01';
     // Verificar si ya existen cargos de mantenimiento para este mes
     const snap = await dbRef.current.collection('pagos').where('concepto', '==', 'Cuota de Mantenimiento').where('tipoMov', '==', 'cargo').where('fecha', '==', fechaCargo).get();
     if (!snap.empty) {
+      setSyncing(false);
       showToast('Ya existen cargos de mantenimiento para este mes', 'err');
       return false;
     }
-    setSyncing(true);
     try {
       const b = dbRef.current.batch();
       const folioBase = 'MNT-' + ano + mesStr;
@@ -3351,13 +3353,49 @@ function App() {
     const tot = rec + pen;
     const mor = tot > 0 ? pen / tot * 100 : 0;
     const um = new Set(pagosFiltrados.filter(p => p.estatus === 'pendiente').map(p => p.unidadId)).size;
+    // Saldo pendiente de meses anteriores (cargos pendientes fuera del filtro actual)
+    const hoy = new Date();
+    const mesActual = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
+    const cargosAnteriores = pagos.filter(p =>
+      p.tipoMov === 'cargo' && !p.cancelado &&
+      (p.estatus === 'pendiente' || p.estatus === 'parcial') &&
+      String(p.fecha || '').slice(0,7) < mesActual
+    );
+    const saldoHistorico = cargosAnteriores.reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
+    const fechasMasAntiguas = cargosAnteriores.map(p => String(p.fecha || '')).filter(Boolean).sort();
+    const mesAntiguo = fechasMasAntiguas.length > 0 ? fechasMasAntiguas[0].slice(0,7) : null;
+    const mesAntiguoLabel = mesAntiguo ? (MESES_S[parseInt(mesAntiguo.slice(5,7))-1] + ' ' + mesAntiguo.slice(0,4)) : null;
+    // Saldos del mes actual por concepto (solo cargos pendientes/parciales del mes en curso)
+    const mesActualStr = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0');
+    const cargosMesActual = pagos.filter(p =>
+      p.tipoMov === 'cargo' && !p.cancelado &&
+      (p.estatus === 'pendiente' || p.estatus === 'parcial') &&
+      String(p.fecha || '').slice(0,7) === mesActualStr
+    );
+    const penMant = cargosMesActual
+      .filter(p => String(p.concepto||'').toLowerCase().includes('mantenimiento'))
+      .reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
+    const penServ = cargosMesActual
+      .filter(p => String(p.concepto||'').toLowerCase().includes('servicio'))
+      .reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
+    const penAccesorios = cargosMesActual
+      .filter(p => {
+        const c = String(p.concepto||'').toLowerCase();
+        return !c.includes('mantenimiento') && !c.includes('servicio');
+      })
+      .reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
     return {
       recaudado: rec,
       pendiente: pen,
       morosidad: mor,
-      unidadesMorosas: um
+      unidadesMorosas: um,
+      saldoHistorico,
+      mesAntiguo: mesAntiguoLabel,
+      penMant,
+      penServ,
+      penAccesorios
     };
-  }, [pagosFiltrados]);
+  }, [pagosFiltrados, pagos]);
 
   // DONA AGRUPADA: caj n/bodega/tarjetas en un solo segmento
   const dataDona = useMemo(() => {
@@ -3649,7 +3687,7 @@ function App() {
     onChange: e => setFBusq(e.target.value),
     className: "w-full pl-8 pr-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
   })))), /*#__PURE__*/React.createElement("div", {
-    className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5"
+    className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-3"
   }, /*#__PURE__*/React.createElement(KPI, {
     icon: /*#__PURE__*/React.createElement(I.TrUp, {
       sz: 22
@@ -3683,6 +3721,44 @@ function App() {
     sub: `de ${unidades.length} totales`,
     color: C.gold,
     grad: `linear-gradient(135deg,${C.navyL},${C.navy})`
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-5"
+  }, /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.TrDn, {
+      sz: 22
+    }),
+    label: "Saldo Meses Anteriores",
+    value: fmt(kpis.saldoHistorico),
+    sub: kpis.mesAntiguo ? `Desde ${kpis.mesAntiguo}` : 'Sin adeudos anteriores',
+    color: kpis.saldoHistorico > 0 ? '#DC2626' : '#9CA3AF',
+    grad: kpis.saldoHistorico > 0 ? `linear-gradient(135deg,#7F1D1D,#B91C1C)` : `linear-gradient(135deg,#374151,#4B5563)`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Sheet, {
+      sz: 22
+    }),
+    label: "Mant. Pendiente Mes Actual",
+    value: fmt(kpis.penMant),
+    sub: kpis.penMant > 0 ? 'Cuotas de mantenimiento' : 'Al corriente',
+    color: kpis.penMant > 0 ? '#0B2545' : '#9CA3AF',
+    grad: `linear-gradient(135deg,#0B2545,#1e3a6e)`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.File, {
+      sz: 22
+    }),
+    label: "Servicios Pendientes Mes Actual",
+    value: fmt(kpis.penServ),
+    sub: kpis.penServ > 0 ? 'Agua, luz, internet...' : 'Al corriente',
+    color: kpis.penServ > 0 ? '#C9A961' : '#9CA3AF',
+    grad: `linear-gradient(135deg,#78350F,#92400E)`
+  }), /*#__PURE__*/React.createElement(KPI, {
+    icon: /*#__PURE__*/React.createElement(I.Plus, {
+      sz: 22
+    }),
+    label: "Accesorios Pendientes Mes Actual",
+    value: fmt(kpis.penAccesorios),
+    sub: kpis.penAccesorios > 0 ? 'Bodega, tarjetas, etc.' : 'Sin pendientes',
+    color: kpis.penAccesorios > 0 ? '#1B7F5A' : '#9CA3AF',
+    grad: `linear-gradient(135deg,#064E3B,#065F46)`
   })), /*#__PURE__*/React.createElement("div", {
     className: "grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5"
   }, /*#__PURE__*/React.createElement("div", {
