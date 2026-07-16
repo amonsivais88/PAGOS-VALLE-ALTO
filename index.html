@@ -4143,16 +4143,16 @@ function App() {
   }, (() => {
     const hoy = new Date();
     const venc = p.estatus === 'pendiente' && p.fechaVencimiento && new Date(p.fechaVencimiento + 'T23:59:59') < hoy;
-    const bg = p.estatus === 'pagado' ? '#D1FAE5' : venc ? '#FEE2E2' : '#FEF3C7';
-    const clr = p.estatus === 'pagado' ? '#1B7F5A' : venc ? '#A6273A' : '#B45309';
-    const lbl = p.estatus === 'pagado' ? 'PAGADO' : venc ? 'VENCIDO' : 'PENDIENTE';
+    const bg = p.estatus === 'pagado' ? '#D1FAE5' : p.estatus === 'a_favor' ? '#DBEAFE' : p.estatus === 'parcial' ? '#FEF3C7' : venc ? '#FEE2E2' : '#FEF3C7';
+    const clr = p.estatus === 'pagado' ? '#1B7F5A' : p.estatus === 'a_favor' ? '#1D4ED8' : p.estatus === 'parcial' ? '#B45309' : venc ? '#A6273A' : '#B45309';
+    const lbl = p.estatus === 'pagado' ? 'PAGADO' : p.estatus === 'a_favor' ? 'A FAVOR' : p.estatus === 'parcial' ? 'PARCIAL' : venc ? 'VENCIDO' : 'PENDIENTE';
     return /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col items-center gap-0.5"
     }, /*#__PURE__*/React.createElement("span", {
       onClick: () => {
-        if (p.cancelado) return;
+        if (p.cancelado || p.estatus === 'a_favor') return; // a_favor no se toca manualmente
         if (p.estatus !== 'pagado') {
-          // Pendiente/Vencido -> abrir modal para confirmar fecha y metodo
+          // Pendiente/Vencido/Parcial -> abrir modal para confirmar fecha y metodo
           setConfPagoId(p.id);
           setConfPagoFecha(new Date().toISOString().split('T')[0]);
           setConfPagoMetodo('Transferencia');
