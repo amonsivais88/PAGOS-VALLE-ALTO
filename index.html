@@ -3025,22 +3025,33 @@ function App() {
       // Cargos totales brutos
       const totalCargos = movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'a_favor')
         .reduce((s, p) => s + Number(p.monto), 0);
-      // Total abonado: pagos completos + montoPagado de parciales + abonos directos (tipoMov=abono)
-      const tp = movs.reduce((s, p) => {
-        if (p.tipoMov === 'abono' && p.estatus !== 'a_favor') return s + Number(p.monto);
-        if (p.tipoMov === 'cargo' && p.estatus === 'pagado') return s + Number(p.monto);
-        if (p.tipoMov === 'cargo' && p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+      // Total abonado = abonos directos + cargos que fueron pagados (con saldo a favor u otro medio)
+      // Se usa totalCargos - td para evitar doble conteo
+      const tp = totalCargos - (movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
+        if (p.estatus === 'pendiente') return s + Number(p.monto);
+        if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
         return s;
-      }, 0);
+      }, 0));
+      // Saldo a favor = total abonos directos registrados - total cargos liquidados con ellos
+      const abonosDirectos = movs.filter(p => p.tipoMov === 'abono' && p.estatus !== 'a_favor')
+        .reduce((s, p) => s + Number(p.monto), 0);
+      const saldoFavorDisponible = movs.filter(p => p.estatus === 'a_favor')
+        .reduce((s, p) => s + Number(p.monto), 0);
       // Total pendiente real: pendientes completos + saldoPendiente de parciales
       const td = movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
         if (p.estatus === 'pendiente') return s + Number(p.monto);
         if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
         return s;
       }, 0);
-      // Saldo a favor acumulado: remanente de abonos que excedieron los cargos
-      const saldoFavor = movs.filter(p => p.estatus === 'a_favor')
+      // Saldo a favor = abono original registrado como a_favor, menos lo que ya se consumio en cargos pagados
+      // Si hay registro explicito a_favor en Firebase, usarlo; si no, calcular por diferencia
+      const saldoFavorRegistrado = movs.filter(p => p.estatus === 'a_favor')
         .reduce((s, p) => s + Number(p.monto), 0);
+      // Remanente real = saldo a favor registrado - cargos pagados que se cubrieron con el
+      // Como los cargos pagados ya estan en tp, el remanente es: abonos directos - tp - saldoFavorRegistrado consumido
+      const abonosTotalesRegistrados = movs.filter(p => p.tipoMov === 'abono')
+        .reduce((s, p) => s + Number(p.monto), 0);
+      const saldoFavor = Math.max(0, abonosTotalesRegistrados - tp);
       docLocal.setFontSize(11);
       docLocal.setTextColor(11, 37, 69);
       docLocal.text('Local / Unidad: ' + uid, 14, startY);
@@ -3082,41 +3093,44 @@ function App() {
       const fy = docLocal.lastAutoTable.finalY + 6;
 
       // ── CUADRO DE TOTALES (orden logico) ──────────────────────────────
-      const tieneFavor = saldoFavor > 0;
-      const altoCuadro = tipo === 'ambos' ? (tieneFavor ? 47 : 38) : 18;
+      // saldoNeto: negativo = a favor, positivo = pendiente, cero = al corriente
+      const saldoNeto = td - saldoFavor; // negativo si hay remanente a favor
+      const altoCuadro = tipo === 'ambos' ? 38 : 18;
       docLocal.setFillColor(244, 245, 247);
       docLocal.rect(110, fy, 86, altoCuadro, 'F');
       docLocal.setFontSize(9);
 
       if (tipo === 'ambos') {
-        // Linea 1: TOTAL CARGADO
+        // Linea 1: TOTAL CARGADO — azul marino
         docLocal.setTextColor(80, 80, 80);
         docLocal.text('TOTAL CARGADO:', 114, fy + 8);
         docLocal.setTextColor(11, 37, 69);
         docLocal.text(fmt(totalCargos), 192, fy + 8, {align: 'right'});
-        // Linea 2: TOTAL ABONADO
+        // Linea 2: TOTAL ABONADO — verde
         docLocal.setTextColor(80, 80, 80);
         docLocal.text('TOTAL ABONADO:', 114, fy + 17);
         docLocal.setTextColor(27, 127, 90);
-        docLocal.text('- ' + fmt(tp), 192, fy + 17, {align: 'right'});
+        docLocal.text('- ' + fmt(tp + saldoFavor), 192, fy + 17, {align: 'right'});
         // Separador
         docLocal.setDrawColor(200, 200, 200);
         docLocal.line(114, fy + 21, 196, fy + 21);
         // Linea 3: SALDO ACTUAL
-        docLocal.setTextColor(11, 37, 69);
+        // Rojo si debe, verde si a favor, gris si en cero
+        docLocal.setTextColor(80, 80, 80);
         docLocal.setFontSize(10);
-        const ySaldo = tieneFavor ? fy + 29 : fy + 30;
-        docLocal.text('SALDO ACTUAL:', 114, ySaldo);
-        docLocal.setTextColor(td > 0 ? 166 : 27, td > 0 ? 39 : 127, td > 0 ? 58 : 90);
-        docLocal.text(td > 0 ? fmt(td) : '$0.00', 192, ySaldo, {align: 'right'});
-        // Linea 4: SALDO A FAVOR (solo si existe)
-        if (tieneFavor) {
-          docLocal.setFontSize(9);
-          docLocal.setTextColor(80, 80, 80);
-          docLocal.text('SALDO A FAVOR:', 114, fy + 39);
-          docLocal.setFontSize(10);
+        docLocal.text('SALDO ACTUAL:', 114, fy + 30);
+        if (saldoNeto > 0.01) {
+          // Debe dinero — rojo
+          docLocal.setTextColor(166, 39, 58);
+          docLocal.text(fmt(saldoNeto), 192, fy + 30, {align: 'right'});
+        } else if (saldoNeto < -0.01) {
+          // A favor — verde con signo negativo y etiqueta
           docLocal.setTextColor(27, 127, 90);
-          docLocal.text(fmt(saldoFavor), 192, fy + 39, {align: 'right'});
+          docLocal.text('- ' + fmt(Math.abs(saldoNeto)) + ' (A FAVOR)', 192, fy + 30, {align: 'right'});
+        } else {
+          // En cero — gris neutro
+          docLocal.setTextColor(120, 120, 120);
+          docLocal.text('$0.00', 192, fy + 30, {align: 'right'});
         }
       } else if (tipo !== 'pagado') {
         docLocal.setTextColor(80, 80, 80);
