@@ -2086,6 +2086,10 @@ function App() {
   const [mImport, setMImport] = useState(false);
   const [mImportG, setMImportG] = useState(false);
   const [mConfig, setMConfig] = useState(false);
+  const [mReclass, setMReclass] = useState(false);
+  const [reclassLocal, setReclassLocal] = useState('');
+  const [reclassResult, setReclassResult] = useState(null);
+  const [reclassBusy, setReclassBusy] = useState(false);
   const [mReporte, setMReporte] = useState(false);
   const [mExportPDF, setMExportPDF] = useState(false);
   const [authErr, setAuthErr] = useState('');
@@ -2622,6 +2626,55 @@ function App() {
       setSyncing(false);
     }
   };
+  // Reclasificar metodoPago de registros pagados con saldo a favor
+  const reclasificarSaldoFavor = async uid => {
+    if (!dbRef.current || !uid) return;
+    setReclassBusy(true);
+    setReclassResult(null);
+    try {
+      // Buscar cargos PAGADOS sin metodoPago 'Saldo a Favor' de este local
+      const snap = await dbRef.current.collection('pagos')
+        .where('unidadId', '==', uid)
+        .where('tipoMov', '==', 'cargo')
+        .where('estatus', '==', 'pagado')
+        .where('cancelado', '==', false)
+        .get();
+      const candidatos = snap.docs.filter(d => {
+        const mp = d.data().metodoPago || '';
+        return mp !== 'Saldo a Favor';
+      });
+      if (candidatos.length === 0) {
+        setReclassResult({ok: false, msg: 'No hay registros que reclasificar en este local.'});
+        setReclassBusy(false);
+        return;
+      }
+      // Verificar que hay saldo a favor registrado para este local
+      const snapAbono = await dbRef.current.collection('pagos')
+        .where('unidadId', '==', uid)
+        .where('estatus', '==', 'a_favor')
+        .where('cancelado', '==', false)
+        .get();
+      if (snapAbono.empty) {
+        setReclassResult({ok: false, msg: 'Este local no tiene saldo a favor registrado. Verifica que el abono este cargado correctamente.'});
+        setReclassBusy(false);
+        return;
+      }
+      const b = dbRef.current.batch();
+      candidatos.forEach(d => {
+        b.update(dbRef.current.collection('pagos').doc(d.id), {
+          metodoPago: 'Saldo a Favor',
+          updatedAt: new Date().toISOString(),
+          nota: (d.data().nota || '') + ' [Reclasificado como Saldo a Favor]'
+        });
+      });
+      await b.commit();
+      setReclassResult({ok: true, msg: candidatos.length + ' registro(s) reclasificados correctamente como Saldo a Favor.'});
+    } catch(e) {
+      setReclassResult({ok: false, msg: 'Error: ' + e.message});
+    }
+    setReclassBusy(false);
+  };
+
   const log = async (a, id, d = {}) => {
     if (!dbRef.current) return;
     try {
@@ -2666,6 +2719,8 @@ function App() {
           var sf = await calcSaldoFavor(r.unidadId);
           if (sf >= r.monto) {
             reg.estatus = 'pagado';
+            reg.metodoPago = 'Saldo a Favor';
+            reg.fechaPago = new Date().toISOString().split('T')[0];
             reg.nota = 'Cubierto con saldo a favor ($' + sf.toLocaleString('es-MX') + ')';
           }
         }
@@ -4742,20 +4797,45 @@ function App() {
   }, "4321"))), mConfig && esAdmin && /*#__PURE__*/React.createElement(Modal, {
     title: "Configuraci\xF3n de Administrador",
     onClose: () => setMConfig(false)
-  }, /*#__PURE__*/React.createElement(Lbl, {
-    text: "Nueva contrase\xF1a (m\xEDnimo 4 caracteres)"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "password",
-    id: "np",
-    placeholder: "Nueva contrase\xF1a",
-    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
-  })), /*#__PURE__*/React.createElement("button", {
-    onClick: () => cambiarPwd(document.getElementById('np').value),
-    className: "w-full mt-3 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
-    style: {
-      background: C.navy
-    }
-  }, "Actualizar contrase\xF1a")), /*#__PURE__*/React.createElement(Toast, {
+  }, /*#__PURE__*/React.createElement("div", {className: "space-y-6"},
+  /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("p", {className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3"}, "Cambiar contrase\xF1a"),
+    /*#__PURE__*/React.createElement(Lbl, {
+      text: "Nueva contrase\xF1a (m\xEDnimo 4 caracteres)"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "password",
+      id: "np",
+      placeholder: "Nueva contrase\xF1a",
+      className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+    })), /*#__PURE__*/React.createElement("button", {
+      onClick: () => cambiarPwd(document.getElementById('np').value),
+      className: "w-full mt-3 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
+      style: {background: C.navy}
+    }, "Actualizar contrase\xF1a")),
+  /*#__PURE__*/React.createElement("hr", {className: "border-gray-200"}),
+  /*#__PURE__*/React.createElement("div", null,
+    /*#__PURE__*/React.createElement("p", {className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1"}, "Reclasificar pagos como Saldo a Favor"),
+    /*#__PURE__*/React.createElement("p", {className: "text-xs text-gray-400 mb-3"}, "Usa esto cuando un local tiene cargos marcados como PAGADO que en realidad se cubrieron con su saldo a favor previo, y necesitas que el dashboard los excluya del Total Recaudado."),
+    /*#__PURE__*/React.createElement("div", {className: "flex gap-2"},
+      /*#__PURE__*/React.createElement("select", {
+        value: reclassLocal,
+        onChange: e => { setReclassLocal(e.target.value); setReclassResult(null); },
+        className: "flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+      },
+        /*#__PURE__*/React.createElement("option", {value: ""}, "-- Selecciona un local --"),
+        unidades.map(u => /*#__PURE__*/React.createElement("option", {key: u.id, value: u.id}, u.id))
+      ),
+      /*#__PURE__*/React.createElement("button", {
+        onClick: () => reclasificarSaldoFavor(reclassLocal),
+        disabled: !reclassLocal || reclassBusy,
+        className: "px-4 py-2 rounded-lg text-white text-sm font-medium transition disabled:opacity-50",
+        style: {background: '#0B2545'}
+      }, reclassBusy ? "Procesando..." : "Reclasificar")
+    ),
+    reclassResult && /*#__PURE__*/React.createElement("div", {
+      className: "mt-3 p-3 rounded-lg text-sm " + (reclassResult.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-700 border border-red-200")
+    }, reclassResult.msg)
+  ))), /*#__PURE__*/React.createElement(Toast, {
     msg: toast.msg,
     type: toast.type
   }));
