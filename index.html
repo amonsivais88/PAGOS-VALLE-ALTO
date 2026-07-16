@@ -2522,7 +2522,7 @@ function App() {
       const saldoPendiente = Number(cargo.saldoPendiente || cargo.monto);
       if (montoRestante >= saldoPendiente) {
         batch.update(db.collection('pagos').doc(cargo.id), {
-          estatus: 'pagado', fechaPago: hoy, metodoPago: metodo,
+          estatus: 'pagado', fechaPago: hoy, metodoPago: metodo || 'Saldo a Favor',
           montoPagado: Number(cargo.monto), saldoPendiente: 0,
           updatedAt: new Date().toISOString(), nota: 'Liquidado con abono'
         });
@@ -2981,7 +2981,7 @@ function App() {
       }
     });
     const fy = doc.lastAutoTable.finalY + 8;
-    const rec = datos.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const rec = datos.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
     const pen = datos.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     doc.setFontSize(10);
     doc.text('Recaudado: ' + fmt(rec), 14, fy);
@@ -3303,9 +3303,9 @@ function App() {
     const totalGastosMes = totalGastosOp + totalGastosEx;
     const saldoCaja = totalIngMes - totalGastosMes;
     const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => p.unidadId));
-    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado').map(p => p.unidadId));
+    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').map(p => p.unidadId));
     const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
-    const montoPagado = pagosMes.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const montoPagado = pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
     const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     const pctCumpl = montoPagado + montoPendiente > 0 ? Math.round(montoPagado / (montoPagado + montoPendiente) * 100) : 0;
     const mapMor = {};
@@ -3314,7 +3314,7 @@ function App() {
     });
     const topMor = Object.entries(mapMor).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const serieMes = MESES_S.map((m, i) => {
-      const ing = pagos.filter(p => !p.cancelado && p.estatus === 'pagado' && new Date(p.fecha + 'T00:00:00').getMonth() === i && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + Number(p.monto), 0);
+      const ing = pagos.filter(p => !p.cancelado && p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor' && new Date(p.fecha + 'T00:00:00').getMonth() === i && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + Number(p.monto), 0);
       const gOp = gastos.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       const gEx = gastos.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       return {
@@ -3494,7 +3494,7 @@ function App() {
     return true;
   }), [gastos, gMes, gAno]);
   const kpis = useMemo(() => {
-    const rec = pagosFiltrados.filter(p => p.estatus === 'pagado').reduce((s, p) => s + Number(p.monto), 0);
+    const rec = pagosFiltrados.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
     const pen = pagosFiltrados.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     const tot = rec + pen;
     const mor = tot > 0 ? pen / tot * 100 : 0;
