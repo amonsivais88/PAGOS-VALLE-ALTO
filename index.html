@@ -2540,6 +2540,21 @@ function App() {
         montoRestante = 0;
       }
     }
+    // Si sobra dinero despues de liquidar todos los cargos, guardarlo como saldo a favor
+    if (montoRestante > 0.01) {
+      batch.set(db.collection('pagos').doc(), {
+        unidadId: uid,
+        concepto: 'Saldo a Favor',
+        monto: montoRestante,
+        fecha: hoy,
+        folio: 'A FAVOR',
+        tipoMov: 'abono',
+        estatus: 'a_favor',
+        cancelado: false,
+        nota: 'Remanente de abono de ' + fmt(montoAbono),
+        createdAt: new Date().toISOString()
+      });
+    }
     return cargosLiquidados;
   };
   const importarConciliados = async (registros, pendientes) => {
@@ -3007,10 +3022,14 @@ function App() {
         if (tipo !== 'ambos' && p.estatus !== tipo) return false;
         return true;
       });
-      // Total abonado: pagos completos + montoPagado de parciales
-      const tp = movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
-        if (p.estatus === 'pagado') return s + Number(p.monto);
-        if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+      // Cargos totales brutos
+      const totalCargos = movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'a_favor')
+        .reduce((s, p) => s + Number(p.monto), 0);
+      // Total abonado: pagos completos + montoPagado de parciales + abonos directos (tipoMov=abono)
+      const tp = movs.reduce((s, p) => {
+        if (p.tipoMov === 'abono' && p.estatus !== 'a_favor') return s + Number(p.monto);
+        if (p.tipoMov === 'cargo' && p.estatus === 'pagado') return s + Number(p.monto);
+        if (p.tipoMov === 'cargo' && p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
         return s;
       }, 0);
       // Total pendiente real: pendientes completos + saldoPendiente de parciales
@@ -3019,6 +3038,9 @@ function App() {
         if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
         return s;
       }, 0);
+      // Saldo a favor acumulado: remanente de abonos que excedieron los cargos
+      const saldoFavor = movs.filter(p => p.estatus === 'a_favor')
+        .reduce((s, p) => s + Number(p.monto), 0);
       docLocal.setFontSize(11);
       docLocal.setTextColor(11, 37, 69);
       docLocal.text('Local / Unidad: ' + uid, 14, startY);
@@ -3060,9 +3082,8 @@ function App() {
       const fy = docLocal.lastAutoTable.finalY + 6;
 
       // ── CUADRO DE TOTALES (orden logico) ──────────────────────────────
-      const totalCargos = movs.filter(p => p.tipoMov === 'cargo')
-        .reduce((s, p) => s + Number(p.monto), 0);
-      const altoCuadro = tipo === 'ambos' ? 38 : 18;
+      const tieneFavor = saldoFavor > 0;
+      const altoCuadro = tipo === 'ambos' ? (tieneFavor ? 47 : 38) : 18;
       docLocal.setFillColor(244, 245, 247);
       docLocal.rect(110, fy, 86, altoCuadro, 'F');
       docLocal.setFontSize(9);
@@ -3081,12 +3102,22 @@ function App() {
         // Separador
         docLocal.setDrawColor(200, 200, 200);
         docLocal.line(114, fy + 21, 196, fy + 21);
-        // Linea 3: SALDO ACTUAL (en negrita visual)
+        // Linea 3: SALDO ACTUAL
         docLocal.setTextColor(11, 37, 69);
         docLocal.setFontSize(10);
-        docLocal.text('SALDO ACTUAL:', 114, fy + 30);
+        const ySaldo = tieneFavor ? fy + 29 : fy + 30;
+        docLocal.text('SALDO ACTUAL:', 114, ySaldo);
         docLocal.setTextColor(td > 0 ? 166 : 27, td > 0 ? 39 : 127, td > 0 ? 58 : 90);
-        docLocal.text(fmt(td), 192, fy + 30, {align: 'right'});
+        docLocal.text(td > 0 ? fmt(td) : '$0.00', 192, ySaldo, {align: 'right'});
+        // Linea 4: SALDO A FAVOR (solo si existe)
+        if (tieneFavor) {
+          docLocal.setFontSize(9);
+          docLocal.setTextColor(80, 80, 80);
+          docLocal.text('SALDO A FAVOR:', 114, fy + 39);
+          docLocal.setFontSize(10);
+          docLocal.setTextColor(27, 127, 90);
+          docLocal.text(fmt(saldoFavor), 192, fy + 39, {align: 'right'});
+        }
       } else if (tipo !== 'pagado') {
         docLocal.setTextColor(80, 80, 80);
         docLocal.text('TOTAL PENDIENTE:', 114, fy + 7);
