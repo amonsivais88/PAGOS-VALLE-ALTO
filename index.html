@@ -960,18 +960,20 @@ function ModalReportePresent({
   const [ano, setAno] = useState(now.getFullYear());
   const [cxp, setCxp] = useState('');
   const [cxpDesc, setCxpDesc] = useState('');
+  const [observaciones, setObservaciones] = useState('');
+  const [obrasIncidencias, setObrasIncidencias] = useState('');
   const [generando, setGenerando] = useState(false);
   const anos = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
   const handleGen = async () => {
     setGenerando(true);
-    // Peque o delay para que el navegador actualice el UI antes de bloquear con PDF
     await new Promise(r => setTimeout(r, 100));
     try {
       await onGen({
-        mes,
-        ano,
+        mes, ano,
         cxp: Number(cxp) || 0,
-        cxpDesc
+        cxpDesc,
+        observaciones,
+        obrasIncidencias
       });
     } finally {
       setGenerando(false);
@@ -1032,7 +1034,27 @@ function ModalReportePresent({
     onChange: e => setCxp(e.target.value),
     placeholder: "215000",
     className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
-  })))), generando && /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "border-t border-gray-200 pt-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2"
+  }, "Obras e Incidencias del Mes (opcional)"), /*#__PURE__*/React.createElement("textarea", {
+    value: obrasIncidencias,
+    onChange: e => setObrasIncidencias(e.target.value),
+    rows: 3,
+    placeholder: "Ej. Reparacion de bomba de agua, pintura de fachada, fuga en piso 3...",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none resize-none"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "border-t border-gray-200 pt-4"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2"
+  }, "Observaciones y Acuerdos del Comit\xe9 (opcional)"), /*#__PURE__*/React.createElement("textarea", {
+    value: observaciones,
+    onChange: e => setObservaciones(e.target.value),
+    rows: 3,
+    placeholder: "Ej. Se acuerda incrementar fondo de reserva, proxima asamblea el dia 15...",
+    className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none resize-none"
+  })), generando && /*#__PURE__*/React.createElement("div", {
     className: "p-4 rounded-lg text-center",
     style: {
       background: '#EFF6FF',
@@ -1062,7 +1084,7 @@ function ModalReportePresent({
     sz: 15
   }), "Generando...") : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(I.Report, {
     sz: 15
-  }), "Descargar Prompt \u2014 ", MESES_L[mes - 1], " ", ano))));
+  }), "Descargar Prompt \u2014 ", MESES_L[mes - 1], " ", ano)))));
 }
 
 /*     COMPONENTE PRINCIPAL                           */
@@ -2626,28 +2648,11 @@ function App() {
       setSyncing(false);
     }
   };
-  // Reclasificar metodoPago de registros pagados con saldo a favor
   const reclasificarSaldoFavor = async uid => {
     if (!dbRef.current || !uid) return;
     setReclassBusy(true);
     setReclassResult(null);
     try {
-      // Buscar cargos PAGADOS sin metodoPago 'Saldo a Favor' de este local
-      const snap = await dbRef.current.collection('pagos')
-        .where('unidadId', '==', uid)
-        .where('tipoMov', '==', 'cargo')
-        .where('estatus', '==', 'pagado')
-        .where('cancelado', '==', false)
-        .get();
-      const candidatos = snap.docs.filter(d => {
-        const mp = d.data().metodoPago || '';
-        return mp !== 'Saldo a Favor';
-      });
-      if (candidatos.length === 0) {
-        setReclassResult({ok: false, msg: 'No hay registros que reclasificar en este local.'});
-        setReclassBusy(false);
-        return;
-      }
       // Verificar que hay saldo a favor registrado para este local
       const snapAbono = await dbRef.current.collection('pagos')
         .where('unidadId', '==', uid)
@@ -2656,6 +2661,29 @@ function App() {
         .get();
       if (snapAbono.empty) {
         setReclassResult({ok: false, msg: 'Este local no tiene saldo a favor registrado. Verifica que el abono este cargado correctamente.'});
+        setReclassBusy(false);
+        return;
+      }
+      // Fecha del abono a favor mas antiguo
+      const fechaAbono = snapAbono.docs
+        .map(d => d.data().fecha || '')
+        .filter(Boolean)
+        .sort()[0];
+      // Buscar cargos PAGADOS sin metodoPago 'Saldo a Favor' con fecha POSTERIOR al abono
+      const snap = await dbRef.current.collection('pagos')
+        .where('unidadId', '==', uid)
+        .where('tipoMov', '==', 'cargo')
+        .where('estatus', '==', 'pagado')
+        .where('cancelado', '==', false)
+        .get();
+      const candidatos = snap.docs.filter(d => {
+        const p = d.data();
+        const mp = p.metodoPago || '';
+        const fecha = p.fecha || '';
+        return mp !== 'Saldo a Favor' && fecha >= fechaAbono;
+      });
+      if (candidatos.length === 0) {
+        setReclassResult({ok: false, msg: 'No hay registros que reclasificar en este local para fechas posteriores al abono (' + fechaAbono + ').'});
         setReclassBusy(false);
         return;
       }
@@ -2668,7 +2696,7 @@ function App() {
         });
       });
       await b.commit();
-      setReclassResult({ok: true, msg: candidatos.length + ' registro(s) reclasificados correctamente como Saldo a Favor.'});
+      setReclassResult({ok: true, msg: candidatos.length + ' registro(s) reclasificados como Saldo a Favor (desde ' + fechaAbono + ').'});
     } catch(e) {
       setReclassResult({ok: false, msg: 'Error: ' + e.message});
     }
@@ -3334,7 +3362,9 @@ function App() {
     mes,
     ano,
     cxp,
-    cxpDesc
+    cxpDesc,
+    observaciones,
+    obrasIncidencias
   }) => {
     const mesNom = MESES_L[mes - 1];
     const pagosMes = pagos.filter(p => {
@@ -3386,102 +3416,210 @@ function App() {
     });
     const nR = String(mes).padStart(2, '0') + '/' + ano;
     const diasMes = new Date(ano, mes, 0).getDate();
+
+    // Datos adicionales para el prompt enriquecido
+    // Saldo a favor acumulado total del edificio
+    const totalSaldoFavor = pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado)
+      .reduce((s, p) => s + Number(p.monto), 0);
+    // Desglose de cobranza por concepto del mes
+    const desgloseMes = {};
+    pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').forEach(p => {
+      desgloseMes[p.concepto] = (desgloseMes[p.concepto] || 0) + Number(p.monto);
+    });
+    // Adeudos historicos (meses anteriores)
+    const mesActualStr2 = ano + '-' + String(mes).padStart(2,'0');
+    const adeudosHistoricos = pagos.filter(p =>
+      !p.cancelado && (p.estatus === 'pendiente' || p.estatus === 'parcial') &&
+      p.tipoMov === 'cargo' && String(p.fecha || '').slice(0,7) < mesActualStr2
+    ).reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
+    // Antigüedad de cartera
+    const hoy2 = new Date();
+    const antiguedad = {m1: 0, m2: 0, m3mas: 0};
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente' && p.tipoMov === 'cargo').forEach(p => {
+      const fP = new Date(p.fecha + 'T00:00:00');
+      const diffMeses = (hoy2.getFullYear() - fP.getFullYear()) * 12 + (hoy2.getMonth() - fP.getMonth());
+      if (diffMeses <= 1) antiguedad.m1++;
+      else if (diffMeses === 2) antiguedad.m2++;
+      else antiguedad.m3mas++;
+    });
+    // Mes anterior para comparativo
+    const mesAntNum = mes === 1 ? 12 : mes - 1;
+    const anoAntNum = mes === 1 ? ano - 1 : ano;
+    const pagosMesAnt = pagos.filter(p => {
+      if (p.cancelado) return false;
+      const f = new Date(p.fecha + 'T00:00:00');
+      return f.getMonth() + 1 === mesAntNum && f.getFullYear() === anoAntNum;
+    });
+    const ingMesAnt = pagosMesAnt.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor')
+      .reduce((s, p) => s + Number(p.monto), 0);
+    const gastosMesAnt = gastos.filter(g => {
+      const f = new Date(g.fecha + 'T00:00:00');
+      return f.getMonth() + 1 === mesAntNum && f.getFullYear() === anoAntNum;
+    }).reduce((s, g) => s + Number(g.monto), 0);
+    const varIng = ingMesAnt > 0 ? ((totalIngMes - ingMesAnt) / ingMesAnt * 100).toFixed(1) : 'N/A';
+    const varGastos = gastosMesAnt > 0 ? ((totalGastosMes - gastosMesAnt) / gastosMesAnt * 100).toFixed(1) : 'N/A';
+    // Locales con adeudo por antiguedad
+    const localesAnt = {};
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente' && p.tipoMov === 'cargo').forEach(p => {
+      const fP = new Date(p.fecha + 'T00:00:00');
+      const diffM = (hoy2.getFullYear() - fP.getFullYear()) * 12 + (hoy2.getMonth() - fP.getMonth());
+      if (!localesAnt[p.unidadId] || diffM > localesAnt[p.unidadId]) localesAnt[p.unidadId] = diffM;
+    });
+
     const NL = '\n';
-    const SEP = '=======================================================' + NL;
-    const DIV = '-------------------------------------------------------' + NL;
+    const SEP = '================================================================' + NL;
+    const DIV = '----------------------------------------------------------------' + NL;
     var L = [];
+
     L.push(SEP);
-    L.push('PROMPT PARA GENERACION DE REPORTE FINANCIERO EVA' + NL);
-    L.push('Edificio Valle Alto - Regimen de Propiedad en Condominio' + NL);
+    L.push('INSTRUCCION PARA CLAUDE — REPORTE FINANCIERO EVA' + NL);
     L.push(SEP + NL);
-    L.push('INSTRUCCION PARA CLAUDE:' + NL);
-    L.push('Genera el Reporte Financiero y de Operaciones al Comite del Edificio Valle Alto.' + NL);
-    L.push('Sigue el formato institucional del modelo PDF: portada azul marino (#0B2545) con foto del' + NL);
-    L.push('edificio, titulo en blanco, subtitulo en dorado (#C9A961). Indice en pagina 2. Cada capitulo' + NL);
-    L.push('en pagina nueva con fondo azul marino. Tablas con encabezado azul marino y texto blanco,' + NL);
-    L.push('filas alternas gris claro. Graficas de barras (azul para mes actual, gris para anteriores).' + NL);
-    L.push('Mapa de deudores en grid: verde=al corriente, rojo=con adeudo. Footer institucional en cada pagina.' + NL);
-    L.push('Estructura: Cap I (Flujo de Efectivo: ingresos, gastos op, gastos ext, total gastos, saldo caja)' + NL);
-    L.push('Cap II (Cobranza: general, mapa deudores, cuentas por pagar si aplica).' + NL + NL);
+
+    L.push('Genera un reporte financiero mensual como un ARCHIVO HTML COMPLETO Y AUTOCONTENIDO.' + NL);
+    L.push('El HTML debe ser profesional, interactivo y visualmente atractivo, listo para imprimir o guardar.' + NL + NL);
+
+    L.push('=== IDENTIDAD VISUAL ===' + NL);
+    L.push('- Colores primarios: Azul marino #0B2545 (fondo portada, encabezados), Dorado #C9A961 (acentos, subtitulos)' + NL);
+    L.push('- Color texto claro: #E2C97E (subtitulos sobre fondo oscuro)' + NL);
+    L.push('- Tipografia: "Cormorant Garamond" para titulos (importar de Google Fonts), "Inter" para cuerpo' + NL);
+    L.push('- Logo: texto tipografico "EVA" con letras grandes en dorado sobre fondo marino' + NL);
+    L.push('- Footer en cada pagina: "Edificio Valle Alto · Sistema EVA · ' + mesNom + ' ' + ano + '"' + NL + NL);
+
+    L.push('=== ESTRUCTURA DEL DOCUMENTO ===' + NL);
+    L.push('1. PORTADA — fondo azul marino completo, logo EVA centrado, titulo del reporte en blanco, periodo en dorado' + NL);
+    L.push('2. RESUMEN EJECUTIVO — 4 tarjetas KPI grandes con iconos SVG' + NL);
+    L.push('3. CAPITULO I — Flujo de Efectivo (ingresos, gastos, saldo caja, comparativo, tendencia anual)' + NL);
+    L.push('4. CAPITULO II — Cobranza (desglose, mapa de locales, antigüedad de cartera, top morosos)' + NL);
+    L.push('5. CAPITULO III — Saldos a Favor (si aplica)' + NL);
+    L.push((cxp > 0 ? '6. CAPITULO IV — Cuentas por Pagar' + NL : ''));
+    L.push((obrasIncidencias ? '7. OBRAS E INCIDENCIAS' + NL : ''));
+    L.push((observaciones ? '8. OBSERVACIONES Y ACUERDOS DEL COMITE' + NL : ''));
+    L.push(NL);
+
+    L.push('=== COMPONENTES VISUALES REQUERIDOS ===' + NL);
+    L.push('Usa Chart.js (CDN) para TODAS las graficas. Usa CSS Grid/Flexbox para tarjetas.' + NL);
+    L.push('A) TARJETAS KPI (4): Ingresos del Mes | Total Gastos | Saldo de Caja | % Cumplimiento Cobranza' + NL);
+    L.push('   - Fondo blanco, borde izquierdo grueso en dorado, icono SVG, valor grande, variacion vs mes anterior' + NL);
+    L.push('B) GRAFICA DE BARRAS DOBLE — Ingresos vs Gastos por mes (Chart.js Bar, azul marino vs dorado)' + NL);
+    L.push('C) GRAFICA DE LINEA — Saldo de Caja acumulado mensual (Chart.js Line, color verde)' + NL);
+    L.push('D) GRAFICA DE DONA — Desglose de ingresos por concepto (Chart.js Doughnut, paleta institucional)' + NL);
+    L.push('E) MAPA DE LOCALES — Grid visual de 87 celdas representando cada local del edificio' + NL);
+    L.push('   Verde=#1B7F5A si al corriente, Rojo=#A6273A si con adeudo, Dorado=#C9A961 si saldo a favor' + NL);
+    L.push('   Cada celda muestra el numero de local. Al pasar el mouse mostrar tooltip con monto' + NL);
+    L.push('F) TABLA DE ANTIGÜEDAD — 3 columnas: 1 mes | 2 meses | 3+ meses, con conteo de locales' + NL);
+    L.push('G) TOP 10 MOROSOS — Tabla con barra de progreso visual por monto' + NL + NL);
+
+    L.push('=== DATOS DEL REPORTE ===' + NL);
     L.push(DIV);
-    L.push('DATOS DEL REPORTE' + NL);
-    L.push(DIV + NL);
     L.push('ENCABEZADO:' + NL);
-    L.push('  Titulo: Reporte del mes de ' + mesNom + ' ' + ano + NL);
-    L.push('  Periodo: Del 1 al ' + diasMes + ' de ' + mesNom.toLowerCase() + ' ' + ano + NL);
+    L.push('  Reporte: Financiero y de Operaciones — ' + mesNom + ' ' + ano + NL);
+    L.push('  Periodo: 1 al ' + diasMes + ' de ' + mesNom.toLowerCase() + ' ' + ano + NL);
     L.push('  Presentado a: Comite Consultivo y de Vigilancia' + NL);
     L.push('  Elaborado por: Administracion EVA ' + ano + NL);
-    L.push('  Documento: Reporte mensual N. ' + nR + NL + NL);
-    L.push('SECCION 1.1 - INGRESOS DEL MES:' + NL);
+    L.push('  Documento No.: ' + nR + NL + NL);
+
+    L.push('--- RESUMEN EJECUTIVO ---' + NL);
+    L.push('  Ingresos del mes: ' + fN(totalIngMes) + NL);
+    L.push('  Total gastos del mes: ' + fN(totalGastosMes) + NL);
+    L.push('  Saldo de caja: ' + fN(saldoCaja) + NL);
+    L.push('  Cumplimiento cobranza: ' + pctCumpl + '%' + NL);
+    L.push('  Variacion ingresos vs mes anterior (' + MESES_S[mesAntNum-1] + '): ' + varIng + '%' + NL);
+    L.push('  Variacion gastos vs mes anterior: ' + varGastos + '%' + NL + NL);
+
+    L.push('--- CAP I: INGRESOS DEL MES POR CONCEPTO ---' + NL);
     Object.entries(ingConc).forEach(([c, v]) => L.push('  ' + c + ': ' + fN(v) + NL));
-    L.push('  TOTAL INGRESOS: ' + fN(totalIngMes) + NL + NL);
-    L.push('SECCION 1.2 - TENDENCIA INGRESOS ' + ano + ':' + NL);
+    L.push('  TOTAL: ' + fN(totalIngMes) + NL + NL);
+
+    L.push('--- CAP I: DESGLOSE INGRESOS REALES (excluye Saldo a Favor) ---' + NL);
+    Object.entries(desgloseMes).length > 0
+      ? Object.entries(desgloseMes).forEach(([c, v]) => L.push('  ' + c + ': ' + fN(v) + NL))
+      : L.push('  Sin ingresos en efectivo este mes (todo cubierto con saldo a favor)' + NL);
+    L.push(NL);
+
+    L.push('--- CAP I: GASTOS OPERATIVOS ---' + NL);
+    gastosOp.length > 0
+      ? gastosOp.forEach(g => L.push('  ' + g.concepto + ': ' + fN(g.monto) + NL))
+      : L.push('  Sin gastos operativos registrados.' + NL);
+    L.push('  TOTAL OPERATIVOS: ' + fN(totalGastosOp) + NL + NL);
+
+    L.push('--- CAP I: GASTOS EXTRAORDINARIOS ---' + NL);
+    gastosEx.length > 0
+      ? gastosEx.forEach(g => L.push('  ' + g.concepto + ': ' + fN(g.monto) + NL))
+      : L.push('  Sin gastos extraordinarios.' + NL);
+    L.push('  TOTAL EXTRAORDINARIOS: ' + fN(totalGastosEx) + NL + NL);
+
+    L.push('--- CAP I: TENDENCIA ANUAL ' + ano + ' (para grafica de barras e linea) ---' + NL);
+    L.push('  Mes | Ingresos | Gastos Op | Gastos Ext | Total Gastos | Saldo Caja' + NL);
     serieMes.forEach(s => {
-      if (s.ing > 0) L.push('  ' + s.m + ': ' + fN(s.ing) + NL);
+      L.push('  ' + s.m + ' | ' + fN(s.ing) + ' | ' + fN(s.gOp) + ' | ' + fN(s.gEx) + ' | ' + fN(s.gTot) + ' | ' + fN(Math.max(0, s.saldo)) + NL);
     });
     L.push(NL);
-    L.push('SECCION 1.3 - GASTOS OPERATIVOS:' + NL);
-    if (gastosOp.length > 0) {
-      gastosOp.forEach(g => L.push('  ' + g.concepto + ': ' + fN(g.monto) + NL));
-    } else {
-      L.push('  Sin gastos operativos registrados.' + NL);
-    }
-    L.push('  TOTAL GASTOS OPERATIVOS: ' + fN(totalGastosOp) + NL + NL);
-    L.push('SECCION 1.4 - TENDENCIA GASTOS OPERATIVOS ' + ano + ':' + NL);
-    serieMes.forEach(s => {
-      if (s.gOp > 0) L.push('  ' + s.m + ': ' + fN(s.gOp) + NL);
-    });
-    L.push(NL);
-    L.push('SECCION 1.5 - GASTOS EXTRAORDINARIOS:' + NL);
-    if (gastosEx.length > 0) {
-      gastosEx.forEach(g => L.push('  ' + g.concepto + ': ' + fN(g.monto) + NL));
-    } else {
-      L.push('  Sin gastos extraordinarios.' + NL);
-    }
-    L.push('  TOTAL GASTOS EXTRAORDINARIOS: ' + fN(totalGastosEx) + NL + NL);
-    L.push('SECCION 1.6 - TOTAL GASTOS POR MES ' + ano + ':' + NL);
-    serieMes.forEach(s => {
-      if (s.gTot > 0) L.push('  ' + s.m + ': ' + fN(s.gTot) + NL);
-    });
-    L.push(NL);
-    L.push('SECCION 1.7 - SALDO EN CAJA POR MES ' + ano + ':' + NL);
-    serieMes.forEach(s => {
-      if (s.ing > 0 || s.gTot > 0) L.push('  ' + s.m + ': ' + fN(Math.max(0, s.saldo)) + NL);
-    });
-    L.push('  SALDO MES ACTUAL: ' + fN(saldoCaja) + NL + NL);
-    L.push('SECCION 2.1 - COBRANZA:' + NL);
-    L.push('  Total locales: ' + unidades.length + NL);
-    L.push('  Al corriente: ' + (unidades.length - soloMorosos.length) + NL);
-    L.push('  Con adeudo: ' + soloMorosos.length + NL);
+
+    L.push('--- CAP II: COBRANZA DEL MES ---' + NL);
+    L.push('  Total locales del edificio: ' + unidades.length + NL);
+    L.push('  Locales al corriente este mes: ' + (unidades.length - soloMorosos.length) + NL);
+    L.push('  Locales con adeudo este mes: ' + soloMorosos.length + NL);
     L.push('  Monto recaudado: ' + fN(montoPagado) + NL);
-    L.push('  Monto pendiente: ' + fN(montoPendiente) + NL);
+    L.push('  Monto pendiente mes actual: ' + fN(montoPendiente) + NL);
+    L.push('  Adeudos de meses anteriores: ' + fN(adeudosHistoricos) + NL);
     L.push('  Cumplimiento: ' + pctCumpl + '%' + NL + NL);
-    L.push('SECCION 2.2 - MAPA DE DEUDORES:' + NL);
-    L.push('  Al corriente: ' + [...alCorriente].sort().join(', ') + NL + NL);
-    L.push('  Con adeudo este mes: ' + soloMorosos.sort().join(', ') + NL + NL);
-    L.push('TOP 10 MOROSOS ACUMULADOS:' + NL);
-    topMor.forEach(([id, tot], i) => L.push('  ' + (i + 1) + '. Local ' + id + ': ' + fN(tot) + NL));
+
+    L.push('--- CAP II: ANTIGÜEDAD DE CARTERA ---' + NL);
+    L.push('  Registros con 1 mes de atraso: ' + antiguedad.m1 + NL);
+    L.push('  Registros con 2 meses de atraso: ' + antiguedad.m2 + NL);
+    L.push('  Registros con 3 o mas meses de atraso: ' + antiguedad.m3mas + NL + NL);
+
+    L.push('--- CAP II: MAPA DE LOCALES (para grid visual) ---' + NL);
+    L.push('  AL CORRIENTE: ' + [...alCorriente].sort().join(', ') + NL + NL);
+    L.push('  CON ADEUDO: ' + soloMorosos.sort().join(', ') + NL + NL);
+    L.push('  CON SALDO A FAVOR: ' + pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado).map(p => p.unidadId).filter((v,i,a) => a.indexOf(v)===i).join(', ') + NL + NL);
+    L.push('  TODOS LOS LOCALES DEL EDIFICIO: ' + unidades.map(u => u.id).join(', ') + NL + NL);
+
+    L.push('--- CAP II: TOP 10 MOROSOS ACUMULADOS ---' + NL);
+    topMor.forEach(([id, tot], i) => L.push('  ' + (i+1) + '. Local ' + id + ': ' + fN(tot) + NL));
     L.push(NL);
+
+    if (totalSaldoFavor > 0) {
+      L.push('--- CAP III: SALDOS A FAVOR ---' + NL);
+      L.push('  Total saldo a favor acumulado en el edificio: ' + fN(totalSaldoFavor) + NL);
+      const locFavor = pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado);
+      locFavor.forEach(p => L.push('  Local ' + p.unidadId + ': ' + fN(p.monto) + ' (desde ' + p.fecha + ')' + NL));
+      L.push(NL);
+    }
+
     if (cxp > 0 || cxpDesc) {
-      L.push('SECCION 2.3 - CUENTAS POR PAGAR:' + NL);
-      L.push('  Proveedor: ' + (cxpDesc || 'Por definir') + NL);
+      L.push('--- CAP IV: CUENTAS POR PAGAR ---' + NL);
+      L.push('  Proveedor/Descripcion: ' + (cxpDesc || 'Por definir') + NL);
       L.push('  Monto: ' + fN(cxp) + NL + NL);
     }
-    L.push(DIV);
-    L.push('RESUMEN EJECUTIVO:' + NL);
-    L.push('  Ingresos: ' + fN(totalIngMes) + NL);
-    L.push('  Gastos Operativos: ' + fN(totalGastosOp) + NL);
-    L.push('  Gastos Extraordinarios: ' + fN(totalGastosEx) + NL);
-    L.push('  Total Gastos: ' + fN(totalGastosMes) + NL);
-    L.push('  SALDO DE CAJA: ' + fN(saldoCaja) + NL);
-    L.push('  Morosidad: ' + soloMorosos.length + ' de ' + unidades.length + ' locales (' + pctCumpl + '% cumplimiento)' + NL + NL);
+
+    if (obrasIncidencias) {
+      L.push('--- OBRAS E INCIDENCIAS DEL MES ---' + NL);
+      L.push(obrasIncidencias + NL + NL);
+    }
+
+    if (observaciones) {
+      L.push('--- OBSERVACIONES Y ACUERDOS DEL COMITE ---' + NL);
+      L.push(observaciones + NL + NL);
+    }
+
     L.push(SEP);
-    L.push('FIN DEL PROMPT - Sistema EVA ' + new Date().toLocaleDateString('es-MX') + NL);
+    L.push('INSTRUCCIONES FINALES DE FORMATO:' + NL);
+    L.push('- El archivo HTML debe ser 100% autocontenido (CSS y JS inline, sin dependencias externas excepto CDN de Chart.js e Google Fonts)' + NL);
+    L.push('- Importar Chart.js desde: https://cdn.jsdelivr.net/npm/chart.js' + NL);
+    L.push('- Importar Google Fonts: Cormorant Garamond 400,600,700 e Inter 400,500,600' + NL);
+    L.push('- La portada debe ocupar 100vh con fondo azul marino #0B2545' + NL);
+    L.push('- Cada capitulo inicia con un encabezado de seccion en azul marino con titulo en blanco y numero en dorado' + NL);
+    L.push('- Las tablas tienen encabezado azul marino con texto blanco, filas alternas #F8FAFC y blanco' + NL);
+    L.push('- Los valores monetarios siempre en formato $X,XXX.00 (locale es-MX)' + NL);
+    L.push('- Agregar @media print para ocultar elementos no imprimibles y forzar saltos de pagina entre capitulos' + NL);
+    L.push('- El documento debe verse identico en Chrome, Safari y Firefox' + NL);
     L.push(SEP);
+    L.push('FIN DEL PROMPT — Sistema EVA ' + new Date().toLocaleDateString('es-MX') + NL);
+    L.push(SEP);
+
     var txt = L.join('');
-    var blob = new Blob([txt], {
-      type: 'text/plain;charset=utf-8'
-    });
+    var blob = new Blob([txt], {type: 'text/plain;charset=utf-8'});
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = url;
@@ -3491,7 +3629,7 @@ function App() {
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
     setMReporte(false);
-    showToast('Prompt descargado - pegalo en Claude para generar el reporte', 'ok');
+    showToast('Prompt descargado — pegalo en Claude para generar el reporte HTML', 'ok');
   };
 
   /* DATOS DERIVADOS */
