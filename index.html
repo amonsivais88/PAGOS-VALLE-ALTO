@@ -3064,7 +3064,12 @@ function App() {
       }
     });
     const fy = doc.lastAutoTable.finalY + 8;
-    const rec = datos.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
+    const rec = datos.reduce((s, p) => {
+      if (p.metodoPago === 'Saldo a Favor' || p.cancelado) return s;
+      if (p.estatus === 'pagado') return s + Number(p.monto);
+      if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+      return s;
+    }, 0);
     const pen = datos.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     doc.setFontSize(10);
     doc.text('Recaudado: ' + fmt(rec), 14, fy);
@@ -3399,7 +3404,10 @@ function App() {
     });
     const topMor = Object.entries(mapMor).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const serieMes = MESES_S.map((m, i) => {
-      const ing = pagos.filter(p => !p.cancelado && p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor' && new Date(p.fecha + 'T00:00:00').getMonth() === i && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + Number(p.monto), 0);
+      const ing = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && p.metodoPago !== 'Saldo a Favor' && new Date(p.fecha + 'T00:00:00').getMonth() === i && new Date(p.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, p) => {
+        if (p.estatus === 'pagado') return s + Number(p.monto);
+        return s + Number(p.montoPagado || 0);
+      }, 0);
       const gOp = gastos.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       const gEx = gastos.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       return {
@@ -3687,7 +3695,12 @@ function App() {
     return true;
   }), [gastos, gMes, gAno]);
   const kpis = useMemo(() => {
-    const rec = pagosFiltrados.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
+    const rec = pagosFiltrados.reduce((s, p) => {
+      if (p.metodoPago === 'Saldo a Favor' || p.cancelado) return s;
+      if (p.estatus === 'pagado') return s + Number(p.monto);
+      if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+      return s;
+    }, 0);
     const pen = pagosFiltrados.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     const tot = rec + pen;
     const mor = tot > 0 ? pen / tot * 100 : 0;
@@ -4014,7 +4027,9 @@ function App() {
     value: "pagado"
   }, "Pagados"), /*#__PURE__*/React.createElement("option", {
     value: "pendiente"
-  }, "Pendientes")), /*#__PURE__*/React.createElement("div", {
+  }, "Pendientes"), /*#__PURE__*/React.createElement("option", {
+    value: "parcial"
+  }, "Parciales")), /*#__PURE__*/React.createElement("div", {
     className: "relative"
   }, /*#__PURE__*/React.createElement(I.Search, {
     sz: 13,
@@ -4361,7 +4376,10 @@ function App() {
         color: clr
       },
       title: "Click para cambiar estatus"
-    }, lbl), venc && p.fechaVencimiento && /*#__PURE__*/React.createElement("span", {
+    }, lbl), p.estatus === 'parcial' && /*#__PURE__*/React.createElement("span", {
+      className: "text-[9px] font-medium",
+      style: {color: '#B45309'}
+    }, fmt(p.montoPagado || 0), " / ", fmt(p.saldoPendiente || 0)), venc && p.fechaVencimiento && /*#__PURE__*/React.createElement("span", {
       className: "text-[9px]",
       style: {
         color: '#EF4444'
