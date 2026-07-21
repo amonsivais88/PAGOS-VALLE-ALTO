@@ -2738,10 +2738,9 @@ function App() {
     setSyncing(true);
     try {
       const b = dbRef.current.batch();
+      const abonosAGuardar = []; // solo abonos que no se aplicaron completamente
       for (const r of rs) {
-        var reg = {
-          ...r
-        };
+        var reg = { ...r };
         if (r.tipoMov === 'cargo' && r.estatus === 'pendiente') {
           // Si es cargo, verificar si hay saldo a favor para cubrirlo
           var sf = await calcSaldoFavor(r.unidadId);
@@ -2751,22 +2750,56 @@ function App() {
             reg.fechaPago = new Date().toISOString().split('T')[0];
             reg.nota = 'Cubierto con saldo a favor ($' + sf.toLocaleString('es-MX') + ')';
           }
+          b.set(dbRef.current.collection('pagos').doc(), reg);
+        } else if (r.tipoMov === 'abono') {
+          // Los abonos se procesan despues — no guardar todavia
+          abonosAGuardar.push(r);
+        } else {
+          b.set(dbRef.current.collection('pagos').doc(), reg);
         }
-        b.set(dbRef.current.collection('pagos').doc(), reg);
       }
       await b.commit();
-      // Si hay abonos, aplicarlos sobre cargos pendientes existentes
+      // Procesar abonos: aplicar sobre cargos pendientes primero
       var totalLiq = 0;
-      const abonos = rs.filter(r => r.tipoMov === 'abono');
-      if (abonos.length > 0) {
-        const b2 = dbRef.current.batch();
-        for (var ai = 0; ai < abonos.length; ai++) {
-          const liq = await aplicarAbonoSobrePendientes(abonos[ai].unidadId, abonos[ai].monto, b2, dbRef.current);
+      if (abonosAGuardar.length > 0) {
+        for (var ai = 0; ai < abonosAGuardar.length; ai++) {
+          const abono = abonosAGuardar[ai];
+          // Ver cuanto hay pendiente antes de aplicar
+          const snapPend = await dbRef.current.collection('pagos')
+            .where('unidadId', '==', abono.unidadId)
+            .where('tipoMov', '==', 'cargo')
+            .where('cancelado', '==', false)
+            .get();
+          const totalPendiente = snapPend.docs.reduce((s, d) => {
+            const p = d.data();
+            if (p.estatus === 'pendiente') return s + Number(p.monto);
+            if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
+            return s;
+          }, 0);
+          const b2 = dbRef.current.batch();
+          const liq = await aplicarAbonoSobrePendientes(
+            abono.unidadId, abono.monto, b2, dbRef.current,
+            abono.fechaPago || abono.fecha, abono.metodoPago
+          );
           totalLiq += liq;
+          const remanente = abono.monto - Math.min(abono.monto, totalPendiente);
+          // Solo guardar el registro del abono si hay remanente (saldo a favor)
+          // o si no habia ningún cargo pendiente que aplicar
+          if (remanente > 0.01 || totalPendiente === 0) {
+            const montoAGuardar = remanente > 0.01 ? remanente : abono.monto;
+            b2.set(dbRef.current.collection('pagos').doc(), {
+              ...abono,
+              monto: montoAGuardar,
+              estatus: 'a_favor',
+              nota: remanente > 0.01
+                ? 'Saldo a favor: remanente de abono de $' + abono.monto.toLocaleString('es-MX')
+                : (abono.nota || 'Abono sin cargos pendientes')
+            });
+          }
+          await b2.commit();
         }
-        await b2.commit();
       }
-      var msg = rs.length + ' registro(s) guardado(s)';
+      var msg = (rs.length - abonosAGuardar.length) + ' registro(s) guardado(s)';
       if (totalLiq > 0) msg += '. ' + totalLiq + ' cargo(s) liquidado(s) automaticamente';
       showToast(msg, 'ok');
       setMReg(false);
