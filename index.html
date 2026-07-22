@@ -110,6 +110,7 @@ const CONCEPTO_COLOR = {
   'Acceso':                 '#6B4E71', // morado
   'Totem':                  '#B45309', // ambar
   'Adicionales':            '#0E6BA8', // azul claro (grupo)
+  'Saldo a Favor':          '#1D4ED8', // azul brillante
   'Otros':                  '#64748B', // gris
 };
 const getConceptoColor = c => CONCEPTO_COLOR[c] || '#64748B';
@@ -2732,9 +2733,11 @@ function App() {
         if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
         return s;
       }, 0);
-      const abonosTotalesRegistrados = movs.filter(p => p.tipoMov === 'abono')
+      // FIX: el saldo a favor real es la suma directa de los documentos con estatus 'a_favor'
+      // (antes se calculaba por resta indirecta abonosTotalesRegistrados - tp, que fallaba
+      // cuando los cargos se marcaban pagados por una via distinta a un abono documentado)
+      const saldoFavor = movs.filter(p => p.estatus === 'a_favor')
         .reduce((s, p) => s + Number(p.monto), 0);
-      const saldoFavor = Math.max(0, abonosTotalesRegistrados - tp);
       docLocal.setFontSize(11);
       docLocal.setTextColor(11, 37, 69);
       docLocal.text('Local / Unidad: ' + uid, 14, startY);
@@ -3254,10 +3257,13 @@ function App() {
     return true;
   }), [gastos, gMes, gAno]);
   const kpis = useMemo(() => {
+    // FIX: "Total Recaudado" ahora incluye tambien los registros con estatus 'a_favor',
+    // porque ese dinero SI entro a la cuenta, aunque quede como credito sin aplicar.
     const rec = pagosFiltrados.reduce((s, p) => {
       if (p.metodoPago === 'Saldo a Favor' || p.cancelado) return s;
       if (p.estatus === 'pagado') return s + Number(p.monto);
       if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+      if (p.estatus === 'a_favor') return s + Number(p.monto);
       return s;
     }, 0);
     const pen = pagosFiltrados.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
@@ -3309,7 +3315,7 @@ function App() {
   // DONA AGRUPADA: estacionamiento/bodega/tarjetas/acceso/totem en un solo segmento "Adicionales"
   const dataDona = useMemo(() => {
     const map = {};
-    pagosFiltrados.filter(p => p.estatus === 'pagado').forEach(p => {
+    pagosFiltrados.filter(p => p.estatus === 'pagado' || p.estatus === 'a_favor').forEach(p => {
       const key = CONCEPTOS_CAJON.includes(p.concepto) ? 'Adicionales' : p.concepto;
       map[key] = (map[key] || 0) + Number(p.monto);
     });
@@ -3329,7 +3335,9 @@ function App() {
     });
     pagos.filter(p => !p.cancelado && new Date(fechaEfectiva(p) + 'T00:00:00').getFullYear() === Number(fAno === 'todos' ? now.getFullYear() : fAno)).forEach(p => {
       const m = MESES_S[new Date(fechaEfectiva(p) + 'T00:00:00').getMonth()];
-      if (p.estatus === 'pagado') map[m].Recaudado += Number(p.monto);else map[m].Pendiente += Number(p.monto);
+      // FIX: incluir 'a_favor' como Recaudado (dinero que ya entro, aunque este sin aplicar)
+      if (p.estatus === 'pagado' || p.estatus === 'a_favor') map[m].Recaudado += Number(p.monto);
+      else if (p.estatus === 'pendiente') map[m].Pendiente += Number(p.monto);
     });
     return Object.values(map);
   }, [pagos, fAno]);
@@ -3574,7 +3582,9 @@ function App() {
   }, "Todos conceptos"), CONCEPTOS.map(c => /*#__PURE__*/React.createElement("option", {
     key: c,
     value: c
-  }, c))), /*#__PURE__*/React.createElement("select", {
+  }, c)), /*#__PURE__*/React.createElement("option", {
+    value: "Saldo a Favor"
+  }, "Saldo a Favor")), /*#__PURE__*/React.createElement("select", {
     value: fEst,
     onChange: e => setFEst(e.target.value),
     className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
@@ -3586,7 +3596,9 @@ function App() {
     value: "pendiente"
   }, "Pendientes"), /*#__PURE__*/React.createElement("option", {
     value: "parcial"
-  }, "Parciales")), /*#__PURE__*/React.createElement("div", {
+  }, "Parciales"), /*#__PURE__*/React.createElement("option", {
+    value: "a_favor"
+  }, "Saldo a Favor")), /*#__PURE__*/React.createElement("div", {
     className: "relative"
   }, /*#__PURE__*/React.createElement(I.Search, {
     sz: 13,
