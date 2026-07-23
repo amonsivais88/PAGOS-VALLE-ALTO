@@ -2131,14 +2131,23 @@ function App() {
     return 3;
   };
 
-  // Aplica un abono sobre los cargos pendientes de un local. Si no hay cargos pendientes,
+  // Aplica un abono sobre los cargos pendientes de un local. Si se especifica `concepto`,
+  // SOLO se aplica contra cargos pendientes de ese mismo concepto (evita que un abono de
+  // "Servicios" se cuele y liquide/marque parcial un cargo de "Cuota de Mantenimiento" u
+  // otro concepto distinto). Si no se especifica concepto (ej. conciliacion bancaria, donde
+  // no se sabe a que concepto corresponde el deposito), se mantiene el comportamiento previo
+  // (prioridad Mantenimiento > Servicios > otros). Si no hay cargos pendientes que apliquen,
   // o si sobra dinero despues de liquidarlos, ese remanente se guarda como Saldo a Favor
   // AQUI ADENTRO (unico lugar donde se crea un registro a_favor), para evitar duplicados.
-  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago) => {
+  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago, concepto) => {
     const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', '==', 'pendiente').where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
     const hoy = fechaPago || new Date().toISOString().split('T')[0];
     const metodo = metodoPago || 'Transferencia';
-    if (snap.empty) {
+    let cargosRaw = snap.docs.map(d => ({id: d.id, ...d.data()}));
+    if (concepto) {
+      cargosRaw = cargosRaw.filter(c => c.concepto === concepto);
+    }
+    if (cargosRaw.length === 0) {
       batch.set(db.collection('pagos').doc(), {
         unidadId: uid,
         concepto: 'Saldo a Favor',
@@ -2148,12 +2157,14 @@ function App() {
         tipoMov: 'abono',
         estatus: 'a_favor',
         cancelado: false,
-        nota: 'Abono sin cargos pendientes',
+        conceptoOrigen: concepto || null,
+        nota: concepto ? ('Abono de ' + concepto + ' sin cargos pendientes de ese concepto') : 'Abono sin cargos pendientes',
         createdAt: new Date().toISOString()
       });
       return 0;
     }
-    const cargos = snap.docs.map(d => ({id: d.id, ...d.data()})).sort((a, b) => {
+    const cargos = cargosRaw.sort((a, b) => {
+      if (concepto) return String(a.fecha || '').localeCompare(String(b.fecha || ''));
       const pA = prioridadConcepto(a.concepto), pB = prioridadConcepto(b.concepto);
       if (pA !== pB) return pA - pB;
       return String(a.fecha || '').localeCompare(String(b.fecha || ''));
@@ -2193,7 +2204,8 @@ function App() {
         tipoMov: 'abono',
         estatus: 'a_favor',
         cancelado: false,
-        nota: 'Remanente de abono de ' + fmt(montoAbono),
+        conceptoOrigen: concepto || null,
+        nota: 'Remanente de abono de ' + fmt(montoAbono) + (concepto ? ' (' + concepto + ')' : ''),
         createdAt: new Date().toISOString()
       });
     }
@@ -2371,7 +2383,7 @@ function App() {
           const b2 = dbRef.current.batch();
           const liq = await aplicarAbonoSobrePendientes(
             abono.unidadId, abono.monto, b2, dbRef.current,
-            abono.fechaPago || abono.fecha, abono.metodoPago
+            abono.fechaPago || abono.fecha, abono.metodoPago, abono.concepto
           );
           totalLiq += liq;
           await b2.commit();
