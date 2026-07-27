@@ -2732,7 +2732,7 @@ function App() {
         if (f < new Date(anoD, mesD - 1, 1) || f > new Date(anoH, mesH, 0)) return false;
         if (tipo !== 'ambos' && p.estatus !== tipo) return false;
         return true;
-      });
+      }).sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
       const totalCargos = movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'a_favor')
         .reduce((s, p) => s + Number(p.monto), 0);
       const tp = totalCargos - (movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
@@ -3229,7 +3229,11 @@ function App() {
     let arr = base.filter(p => {
       if (p.cancelado) return false;
       if (tab === 'historico') {
-        const f = new Date(fechaEfectiva(p) + 'T00:00:00');
+        // Se filtra por p.fecha (la fecha del cargo/abono), que es lo que la columna
+        // FECHA realmente muestra en la tabla. Antes se filtraba por fechaEfectiva
+        // (fecha de PAGO), lo que hacia que un registro pagado en 2026 pero con fecha
+        // de cargo de otro ano apareciera bajo el filtro "2026" mostrando ese otro ano.
+        const f = new Date(p.fecha + 'T00:00:00');
         if (fMes !== 'todos' && f.getMonth() + 1 !== Number(fMes)) return false;
         if (fAno !== 'todos' && f.getFullYear() !== Number(fAno)) return false;
       }
