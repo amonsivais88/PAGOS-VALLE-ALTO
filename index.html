@@ -2965,6 +2965,11 @@ function App() {
     obrasIncidencias
   }) => {
     const mesNom = MESES_L[mes - 1];
+    // Normaliza el unidadId por si algun registro viejo quedo guardado como "Piso 8"
+    // (texto de display) en vez de "P8" (ID real de la unidad). Sin esto, ese local
+    // aparece duplicado/mal clasificado en el prompt (ej. como moroso aunque ya pago,
+    // porque su pago quedo "fichado" bajo un nombre distinto al que usa el resto del sistema).
+    const normUid = uid => (uid === 'Piso 8' || uid === 'PISO 8' || uid === 'piso 8') ? 'P8' : uid;
     const pagosMes = pagos.filter(p => {
       if (p.cancelado) return false;
       const f = new Date(fechaEfectiva(p) + 'T00:00:00');
@@ -2985,15 +2990,16 @@ function App() {
     const totalGastosEx = gastosEx.reduce((s, g) => s + Number(g.monto), 0);
     const totalGastosMes = totalGastosOp + totalGastosEx;
     const saldoCaja = totalIngMes - totalGastosMes;
-    const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => p.unidadId));
-    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').map(p => p.unidadId));
+    const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => normUid(p.unidadId)));
+    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').map(p => normUid(p.unidadId)));
     const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
     const montoPagado = pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
     const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     const pctCumpl = montoPagado + montoPendiente > 0 ? Math.round(montoPagado / (montoPagado + montoPendiente) * 100) : 0;
     const mapMor = {};
     pagos.filter(p => !p.cancelado && p.estatus === 'pendiente').forEach(p => {
-      mapMor[p.unidadId] = (mapMor[p.unidadId] || 0) + Number(p.monto);
+      const uid = normUid(p.unidadId);
+      mapMor[uid] = (mapMor[uid] || 0) + Number(p.monto);
     });
     const topMor = Object.entries(mapMor).sort((a, b) => b[1] - a[1]).slice(0, 10);
     const serieMes = MESES_S.map((m, i) => {
@@ -3166,7 +3172,7 @@ function App() {
     L.push('--- CAP II: MAPA DE LOCALES (para grid visual) ---' + NL);
     L.push('  AL CORRIENTE: ' + [...alCorriente].sort().join(', ') + NL + NL);
     L.push('  CON ADEUDO: ' + soloMorosos.sort().join(', ') + NL + NL);
-    L.push('  CON SALDO A FAVOR: ' + pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado).map(p => p.unidadId).filter((v,i,a) => a.indexOf(v)===i).join(', ') + NL + NL);
+    L.push('  CON SALDO A FAVOR: ' + pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado).map(p => normUid(p.unidadId)).filter((v,i,a) => a.indexOf(v)===i).join(', ') + NL + NL);
     L.push('  TODOS LOS LOCALES DEL EDIFICIO: ' + unidades.map(u => u.id).join(', ') + NL + NL);
 
     L.push('--- CAP II: TOP 10 MOROSOS ACUMULADOS ---' + NL);
@@ -3177,7 +3183,7 @@ function App() {
       L.push('--- CAP III: SALDOS A FAVOR ---' + NL);
       L.push('  Total saldo a favor acumulado en el edificio: ' + fN(totalSaldoFavor) + NL);
       const locFavor = pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado);
-      locFavor.forEach(p => L.push('  Local ' + p.unidadId + ': ' + fN(p.monto) + ' (desde ' + p.fecha + ')' + NL));
+      locFavor.forEach(p => L.push('  Local ' + normUid(p.unidadId) + ': ' + fN(p.monto) + ' (desde ' + p.fecha + ')' + NL));
       L.push(NL);
     }
 
