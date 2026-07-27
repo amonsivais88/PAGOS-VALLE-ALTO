@@ -2476,18 +2476,26 @@ function App() {
     setSyncing(true);
     try {
       const b = dbRef.current.batch();
+      var omitidas = 0;
       rows.forEach(r => {
+        // Limpia simbolos de moneda, comas de miles y espacios antes de convertir a numero.
+        // Sin esto, un monto como "$4,000.00" se convertia en NaN y se guardaba asi en Firestore.
+        const montoLimpio = Number(String(r.Monto == null ? '' : r.Monto).replace(/[$,\s]/g, ''));
+        if (!r.Monto && r.Monto !== 0 || isNaN(montoLimpio)) {
+          omitidas++;
+          return;
+        }
         b.set(dbRef.current.collection('gastos').doc(), {
           fecha: excelFecha(r.Fecha),
           concepto: String(r.Concepto),
-          monto: Number(r.Monto),
+          monto: montoLimpio,
           descripcion: String(r.Descripcion || ''),
           tipoGasto: String(r.Tipo || 'operativo').toLowerCase(),
           createdAt: new Date().toISOString()
         });
       });
       await b.commit();
-      showToast('Gastos importados', 'ok');
+      showToast('Gastos importados' + (omitidas > 0 ? ' (' + omitidas + ' omitidos por monto invalido)' : ''), 'ok');
       setMImportG(false);
     } catch (e) {
       showToast('Error: ' + e.message, 'err');
