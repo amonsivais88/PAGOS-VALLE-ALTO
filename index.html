@@ -3229,11 +3229,12 @@ function App() {
     let arr = base.filter(p => {
       if (p.cancelado) return false;
       if (tab === 'historico') {
-        // Se filtra por p.fecha (la fecha del cargo/abono), que es lo que la columna
-        // FECHA realmente muestra en la tabla. Antes se filtraba por fechaEfectiva
-        // (fecha de PAGO), lo que hacia que un registro pagado en 2026 pero con fecha
-        // de cargo de otro ano apareciera bajo el filtro "2026" mostrando ese otro ano.
-        const f = new Date(p.fecha + 'T00:00:00');
+        // IMPORTANTE: se filtra por fechaEfectiva (fecha de PAGO si ya esta pagado/parcial,
+        // fecha del cargo si no), no por p.fecha. Esto es intencional: "Total Recaudado de
+        // un mes" debe significar dinero que realmente entro ese mes (cuadra con banco y con
+        // cierres contables ya hechos), no cargos originados ese mes sin importar cuando se
+        // cobraron. Cambiar esto reclasifica registros entre meses y descuadra cierres previos.
+        const f = new Date(fechaEfectiva(p) + 'T00:00:00');
         if (fMes !== 'todos' && f.getMonth() + 1 !== Number(fMes)) return false;
         if (fAno !== 'todos' && f.getFullYear() !== Number(fAno)) return false;
       }
