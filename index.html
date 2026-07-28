@@ -2996,8 +2996,13 @@ function App() {
     const montoPagado = pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
     const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     const pctCumpl = montoPagado + montoPendiente > 0 ? Math.round(montoPagado / (montoPagado + montoPendiente) * 100) : 0;
+    // Corte de fecha para el Top 10: solo cargos pendientes con fecha <= ultimo dia del
+    // mes del reporte. Antes se tomaba TODO el historial pendiente sin importar la fecha
+    // del cargo, por lo que un reporte de Mayo incluia por error adeudos de Junio/Julio
+    // (cargos que aun no correspondia cobrar al corte de Mayo).
+    const cortePeriodo = ano + '-' + String(mes).padStart(2, '0') + '-' + String(new Date(ano, mes, 0).getDate()).padStart(2, '0');
     const mapMor = {};
-    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente').forEach(p => {
+    pagos.filter(p => !p.cancelado && p.estatus === 'pendiente' && String(p.fecha || '') <= cortePeriodo).forEach(p => {
       const uid = normUid(p.unidadId);
       mapMor[uid] = (mapMor[uid] || 0) + Number(p.monto);
     });
