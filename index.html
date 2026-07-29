@@ -2989,7 +2989,9 @@ function App() {
     const totalGastosOp = gastosOp.reduce((s, g) => s + Number(g.monto), 0);
     const totalGastosEx = gastosEx.reduce((s, g) => s + Number(g.monto), 0);
     const totalGastosMes = totalGastosOp + totalGastosEx;
-    const saldoCaja = totalIngMes - totalGastosMes;
+    // NOTA: el saldo de caja acumulado (saldoCajaMesAnterior/saldoCajaMesActual) se calcula
+    // mas abajo, despues de construir serieMes, siguiendo la formula:
+    // Saldo del Mes = Saldo Mes Anterior + Ingresos del Mes - Gastos del Mes
     const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => normUid(p.unidadId)));
     const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').map(p => normUid(p.unidadId)));
     const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
@@ -3007,22 +3009,39 @@ function App() {
       mapMor[uid] = (mapMor[uid] || 0) + Number(p.monto);
     });
     const topMor = Object.entries(mapMor).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    // Saldo de caja ACUMULADO: arrastra mes a mes (Saldo = Saldo Anterior + Ingresos - Gastos),
+    // empezando por lo que ya existiera antes de enero del ano del reporte (si hay historial
+    // previo). Los meses posteriores al mes del reporte se dejan en null (no se muestran con
+    // $0.00, que daba la falsa impresion de que ya se sabia el resultado de meses futuros).
+    const finAnoAnteriorStr = (ano - 1) + '-12-31';
+    const ingresosAntesDelAno = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && p.metodoPago !== 'Saldo a Favor' && String(fechaEfectiva(p) || '') <= finAnoAnteriorStr).reduce((s, p) => s + (p.estatus === 'pagado' ? Number(p.monto) : Number(p.montoPagado || 0)), 0);
+    const gastosAntesDelAno = gastos.filter(g => String(g.fecha || '') <= finAnoAnteriorStr).reduce((s, g) => s + Number(g.monto), 0);
+    let cumSaldo = ingresosAntesDelAno - gastosAntesDelAno;
     const serieMes = MESES_S.map((m, i) => {
+      if (i + 1 > mes) {
+        return { m, ing: null, gOp: null, gEx: null, gTot: null, saldo: null };
+      }
       const ing = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && p.metodoPago !== 'Saldo a Favor' && new Date(fechaEfectiva(p) + 'T00:00:00').getMonth() === i && new Date(fechaEfectiva(p) + 'T00:00:00').getFullYear() === ano).reduce((s, p) => {
         if (p.estatus === 'pagado') return s + Number(p.monto);
         return s + Number(p.montoPagado || 0);
       }, 0);
       const gOp = gastos.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       const gEx = gastos.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
+      const gTot = gOp + gEx;
+      cumSaldo += ing - gTot;
       return {
         m,
         ing,
         gOp,
         gEx,
-        gTot: gOp + gEx,
-        saldo: ing - (gOp + gEx)
+        gTot,
+        saldo: cumSaldo
       };
     });
+    // Saldo del mes anterior y del mes actual, tomados directamente de serieMes para que
+    // RESUMEN EJECUTIVO y TENDENCIA ANUAL siempre muestren el mismo numero (misma fuente).
+    const saldoCajaMesAnterior = mes === 1 ? (ingresosAntesDelAno - gastosAntesDelAno) : serieMes[mes - 2].saldo;
+    const saldoCajaMesActual = serieMes[mes - 1].saldo;
     const fN = n => '$' + Number(n).toLocaleString('es-MX', {
       minimumFractionDigits: 2
     });
@@ -3110,6 +3129,12 @@ function App() {
     L.push('D) GRAFICA DE DONA — Desglose de ingresos por concepto (Chart.js Doughnut, paleta institucional)' + NL);
     L.push('E) MAPA DE LOCALES — Grid visual de 87 celdas representando cada local del edificio' + NL);
     L.push('   Verde=#1B7F5A si al corriente, Rojo=#A6273A si con adeudo, Dorado=#C9A961 si saldo a favor' + NL);
+    L.push('   IMPORTANTE: el color de cada local se determina UNICAMENTE cruzando su numero contra las' + NL);
+    L.push('   listas "AL CORRIENTE", "CON ADEUDO" y "CON SALDO A FAVOR" de la seccion CAP II: MAPA DE' + NL);
+    L.push('   LOCALES mas abajo (que ya estan acotadas al periodo/mes de este reporte). NO uses la' + NL);
+    L.push('   seccion TOP 10 MOROSOS ACUMULADOS para colorear el mapa (esa es historica/acumulada, no' + NL);
+    L.push('   del mes). Un local que no aparezca en ninguna de las 3 listas (sin movimiento este mes)' + NL);
+    L.push('   se pinta gris neutro, NUNCA rojo por defecto.' + NL);
     L.push('   Cada celda muestra el numero de local. Al pasar el mouse mostrar tooltip con monto' + NL);
     L.push('F) TABLA DE ANTIGÜEDAD — 3 columnas: 1 mes | 2 meses | 3+ meses, con conteo de locales' + NL);
     L.push('G) TOP 10 MOROSOS — Tabla con barra de progreso visual por monto' + NL + NL);
@@ -3126,7 +3151,8 @@ function App() {
     L.push('--- RESUMEN EJECUTIVO ---' + NL);
     L.push('  Ingresos del mes: ' + fN(totalIngMes) + NL);
     L.push('  Total gastos del mes: ' + fN(totalGastosMes) + NL);
-    L.push('  Saldo de caja: ' + fN(saldoCaja) + NL);
+    L.push('  Saldo en caja del mes anterior: ' + fN(saldoCajaMesAnterior) + NL);
+    L.push('  Saldo en caja del mes actual: ' + fN(saldoCajaMesActual) + NL);
     L.push('  Cumplimiento cobranza: ' + pctCumpl + '%' + NL);
     L.push('  Variacion ingresos vs mes anterior (' + MESES_S[mesAntNum-1] + '): ' + varIng + '%' + NL);
     L.push('  Variacion gastos vs mes anterior: ' + varGastos + '%' + NL + NL);
@@ -3156,7 +3182,8 @@ function App() {
     L.push('--- CAP I: TENDENCIA ANUAL ' + ano + ' (para grafica de barras e linea) ---' + NL);
     L.push('  Mes | Ingresos | Gastos Op | Gastos Ext | Total Gastos | Saldo Caja' + NL);
     serieMes.forEach(s => {
-      L.push('  ' + s.m + ' | ' + fN(s.ing) + ' | ' + fN(s.gOp) + ' | ' + fN(s.gEx) + ' | ' + fN(s.gTot) + ' | ' + fN(Math.max(0, s.saldo)) + NL);
+      if (s.saldo === null) return; // mes futuro al mes del reporte: se omite, no se imprime como $0.00
+      L.push('  ' + s.m + ' | ' + fN(s.ing) + ' | ' + fN(s.gOp) + ' | ' + fN(s.gEx) + ' | ' + fN(s.gTot) + ' | ' + fN(s.saldo) + NL);
     });
     L.push(NL);
 
