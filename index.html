@@ -2140,7 +2140,11 @@ function App() {
   // o si sobra dinero despues de liquidarlos, ese remanente se guarda como Saldo a Favor
   // AQUI ADENTRO (unico lugar donde se crea un registro a_favor), para evitar duplicados.
   const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago, concepto) => {
-    const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', '==', 'pendiente').where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
+    // Se buscan cargos 'pendiente' Y 'parcial' (antes solo 'pendiente'). Sin 'parcial', un
+    // cargo que ya tenia un abono previo (ej. mes anterior con pago a medias) quedaba invisible
+    // para abonos posteriores: el dinero nuevo se iba a Saldo a Favor en vez de terminar de
+    // liquidar ese saldo parcial pendiente.
+    const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', 'in', ['pendiente', 'parcial']).where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
     const hoy = fechaPago || new Date().toISOString().split('T')[0];
     const metodo = metodoPago || 'Transferencia';
     let cargosRaw = snap.docs.map(d => ({id: d.id, ...d.data()}));
