@@ -99,7 +99,13 @@ const PIE_COLORS = ['#0B2545', '#C9A961', '#2C2F36', '#1B7F5A', '#E07B39', '#0E6
 
 /* Conceptos que se agrupan en "Adicionales" en la dona del dashboard */
 const CONCEPTOS_CAJON = ['Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Acceso', 'Totem'];
-const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Acceso', 'Totem', 'Otros'];
+const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Bodegas', 'Acceso', 'Tarjetas de Acceso', 'Totem', 'Otros'];
+// "Pagos en Mora" es una categoria CALCULADA (cargos pendientes ya vencidos), no un concepto
+// que se elija al capturar un cargo/abono - por eso no esta en CONCEPTOS, solo se usa como
+// opcion sintetica de filtro (igual que "Saldo a Favor") y en graficas/reportes.
+// ORDEN_REPORTE define el orden visual completo (conceptos reales + las 2 categorias
+// sinteticas) para el dropdown de filtro y para el prompt del reporte mensual.
+const ORDEN_REPORTE = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Bodegas', 'Acceso', 'Tarjetas de Acceso', 'Totem', 'Pagos en Mora', 'Saldo a Favor', 'Otros'];
 // Colores fijos por concepto para coherencia visual
 const CONCEPTO_COLOR = {
   'Cuota de Mantenimiento': '#0B2545', // azul marino
@@ -110,10 +116,13 @@ const CONCEPTO_COLOR = {
   'Acceso':                 '#6B4E71', // morado
   'Totem':                  '#B45309', // ambar
   'Adicionales':            '#0E6BA8', // azul claro (grupo)
+  'Pagos en Mora':          '#DC2626', // rojo (cargos vencidos)
   'Saldo a Favor':          '#1D4ED8', // azul brillante
   'Otros':                  '#64748B', // gris
 };
 const getConceptoColor = c => CONCEPTO_COLOR[c] || '#64748B';
+// Un cargo pendiente esta "en mora" si ya paso su fecha de vencimiento
+const esVencido = (p, hoyStr) => p.tipoMov === 'cargo' && p.estatus === 'pendiente' && p.fechaVencimiento && p.fechaVencimiento < hoyStr;
 
 // Fecha efectiva para "recaudado": si ya se pago, cuenta el mes en que se pago realmente (no el mes del cargo)
 const fechaEfectiva = p => ((p.estatus === 'pagado' || p.estatus === 'parcial') && p.fechaPago) ? p.fechaPago : p.fecha;
@@ -2983,9 +2992,19 @@ function App() {
       const f = new Date(g.fecha + 'T00:00:00');
       return f.getMonth() + 1 === mes && f.getFullYear() === ano;
     });
+    // Se incluye el monto ya cobrado (montoPagado) de los cargos en estatus 'parcial',
+    // igual que ya hacia serieMes y el KPI "Total Recaudado" del dashboard. Antes solo se
+    // sumaban cargos 100% 'pagado', por lo que el reporte mostraba menos dinero recaudado
+    // del que realmente ya habia entrado (la parte cobrada de cada pago parcial se perdia).
     const ingConc = {};
-    pagosMes.filter(p => p.estatus === 'pagado').forEach(p => {
-      ingConc[p.concepto] = (ingConc[p.concepto] || 0) + Number(p.monto);
+    pagosMes.forEach(p => {
+      if (p.metodoPago === 'Saldo a Favor') return;
+      let monto = 0;
+      if (p.estatus === 'pagado') monto = Number(p.monto);
+      else if (p.estatus === 'parcial') monto = Number(p.montoPagado || 0);
+      else if (p.estatus === 'a_favor') monto = Number(p.monto);
+      else return;
+      ingConc[p.concepto] = (ingConc[p.concepto] || 0) + monto;
     });
     const totalIngMes = Object.values(ingConc).reduce((s, v) => s + v, 0);
     const gastosOp = gastosMes.filter(g => g.tipoGasto === 'operativo' || !g.tipoGasto);
@@ -2999,14 +3018,30 @@ function App() {
     const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => normUid(p.unidadId)));
     const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').map(p => normUid(p.unidadId)));
     const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
-    const montoPagado = pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
-    const montoPendiente = pagosMes.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
+    // Igual que ingConc/desgloseMes: se incluye la parte ya cobrada (montoPagado) y la parte
+    // aun pendiente (saldoPendiente) de los cargos 'parcial', para que "Cumplimiento cobranza"
+    // no ignore los pagos a medias.
+    const montoPagado = pagosMes.reduce((s, p) => {
+      if (p.metodoPago === 'Saldo a Favor') return s;
+      if (p.estatus === 'pagado') return s + Number(p.monto);
+      if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
+      return s;
+    }, 0);
+    const montoPendiente = pagosMes.reduce((s, p) => {
+      if (p.estatus === 'pendiente') return s + Number(p.monto);
+      if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
+      return s;
+    }, 0);
     const pctCumpl = montoPagado + montoPendiente > 0 ? Math.round(montoPagado / (montoPagado + montoPendiente) * 100) : 0;
     // Corte de fecha para el Top 10: solo cargos pendientes con fecha <= ultimo dia del
     // mes del reporte. Antes se tomaba TODO el historial pendiente sin importar la fecha
     // del cargo, por lo que un reporte de Mayo incluia por error adeudos de Junio/Julio
     // (cargos que aun no correspondia cobrar al corte de Mayo).
     const cortePeriodo = ano + '-' + String(mes).padStart(2, '0') + '-' + String(new Date(ano, mes, 0).getDate()).padStart(2, '0');
+    // Total de cargos que ya estaban vencidos (pendiente + fechaVencimiento < corte del mes
+    // del reporte). Es informativo: NO se suma a totalIngMes (no es dinero cobrado), solo se
+    // muestra dentro del listado ordenado de CAP I si es mayor a cero.
+    const montoMoraCorte = pagos.filter(p => !p.cancelado && esVencido(p, cortePeriodo)).reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
     const mapMor = {};
     pagos.filter(p => !p.cancelado && p.estatus === 'pendiente' && String(p.fecha || '') <= cortePeriodo).forEach(p => {
       const uid = normUid(p.unidadId);
@@ -3055,8 +3090,13 @@ function App() {
     const totalSaldoFavor = pagos.filter(p => p.estatus === 'a_favor' && !p.cancelado)
       .reduce((s, p) => s + Number(p.monto), 0);
     const desgloseMes = {};
-    pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').forEach(p => {
-      desgloseMes[p.concepto] = (desgloseMes[p.concepto] || 0) + Number(p.monto);
+    pagosMes.forEach(p => {
+      if (p.metodoPago === 'Saldo a Favor') return;
+      let monto = 0;
+      if (p.estatus === 'pagado') monto = Number(p.monto);
+      else if (p.estatus === 'parcial') monto = Number(p.montoPagado || 0);
+      else return;
+      desgloseMes[p.concepto] = (desgloseMes[p.concepto] || 0) + monto;
     });
     const mesActualStr2 = ano + '-' + String(mes).padStart(2,'0');
     const adeudosHistoricos = pagos.filter(p =>
@@ -3129,8 +3169,14 @@ function App() {
     L.push('A) TARJETAS KPI (4): Ingresos del Mes | Total Gastos | Saldo de Caja | % Cumplimiento Cobranza' + NL);
     L.push('   - Fondo blanco, borde izquierdo grueso en dorado, icono SVG, valor grande, variacion vs mes anterior' + NL);
     L.push('B) GRAFICA DE BARRAS DOBLE — Ingresos vs Gastos por mes (Chart.js Bar, azul marino vs dorado)' + NL);
+    L.push('   Si la seccion CAP I: INGRESOS DEL MES POR CONCEPTO incluye "Pagos en Mora", agrega una' + NL);
+    L.push('   tercera serie de barras en rojo #DC2626 con ese monto (es informativo: cargos ya vencidos,' + NL);
+    L.push('   no se suma al total de ingresos ni de gastos)' + NL);
     L.push('C) GRAFICA DE LINEA — Saldo de Caja acumulado mensual (Chart.js Line, color verde)' + NL);
     L.push('D) GRAFICA DE DONA — Desglose de ingresos por concepto (Chart.js Doughnut, paleta institucional)' + NL);
+    L.push('   Usa el mismo orden y colores de CAP I: INGRESOS DEL MES POR CONCEPTO. Si aparece "Pagos en' + NL);
+    L.push('   Mora" en esa lista, agregalo como segmento adicional en rojo #DC2626 (informativo, no se' + NL);
+    L.push('   suma al total de la dona de ingresos, se muestra aparte con su propia leyenda/tooltip)' + NL);
     L.push('E) MAPA DE LOCALES — Grid visual de 87 celdas representando cada local del edificio' + NL);
     L.push('   Verde=#1B7F5A si al corriente, Rojo=#A6273A si con adeudo, Dorado=#C9A961 si saldo a favor' + NL);
     L.push('   IMPORTANTE: el color de cada local se determina UNICAMENTE cruzando su numero contra las' + NL);
@@ -3162,12 +3208,18 @@ function App() {
     L.push('  Variacion gastos vs mes anterior: ' + varGastos + '%' + NL + NL);
 
     L.push('--- CAP I: INGRESOS DEL MES POR CONCEPTO ---' + NL);
-    Object.entries(ingConc).forEach(([c, v]) => L.push('  ' + c + ': ' + fN(v) + NL));
+    ORDEN_REPORTE.forEach(c => {
+      const v = c === 'Pagos en Mora' ? montoMoraCorte : (ingConc[c] || 0);
+      if (v > 0) L.push('  ' + c + ': ' + fN(v) + (c === 'Pagos en Mora' ? ' (informativo, cargos vencidos - no se suma al total de ingresos)' : '') + NL);
+    });
     L.push('  TOTAL: ' + fN(totalIngMes) + NL + NL);
 
     L.push('--- CAP I: DESGLOSE INGRESOS REALES (excluye Saldo a Favor) ---' + NL);
-    Object.entries(desgloseMes).length > 0
-      ? Object.entries(desgloseMes).forEach(([c, v]) => L.push('  ' + c + ': ' + fN(v) + NL))
+    Object.keys(desgloseMes).length > 0
+      ? ORDEN_REPORTE.forEach(c => {
+          const v = desgloseMes[c] || 0;
+          if (v > 0) L.push('  ' + c + ': ' + fN(v) + NL);
+        })
       : L.push('  Sin ingresos en efectivo este mes (todo cubierto con saldo a favor)' + NL);
     L.push(NL);
 
@@ -3290,7 +3342,10 @@ function App() {
       }
       if (fLocal !== 'todos' && p.unidadId !== fLocal) return false;
       if (fEst !== 'todos' && p.estatus !== fEst) return false;
-      if (fConc !== 'todos' && p.concepto !== fConc) return false;
+      if (fConc === 'Pagos en Mora') {
+        const hoyStr = new Date().toISOString().split('T')[0];
+        if (!esVencido(p, hoyStr)) return false;
+      } else if (fConc !== 'todos' && p.concepto !== fConc) return false;
       if (fBusq) {
         const q = fBusq.toLowerCase();
         if (!p.unidadId.toLowerCase().includes(q) && !p.concepto.toLowerCase().includes(q) && !(p.folio || '').toLowerCase().includes(q)) return false;
@@ -3382,9 +3437,14 @@ function App() {
   // DONA AGRUPADA: estacionamiento/bodega/tarjetas/acceso/totem en un solo segmento "Adicionales"
   const dataDona = useMemo(() => {
     const map = {};
-    pagosFiltrados.filter(p => p.estatus === 'pagado' || p.estatus === 'a_favor').forEach(p => {
-      const key = CONCEPTOS_CAJON.includes(p.concepto) ? 'Adicionales' : p.concepto;
-      map[key] = (map[key] || 0) + Number(p.monto);
+    const hoyStr = new Date().toISOString().split('T')[0];
+    pagosFiltrados.forEach(p => {
+      if (p.estatus === 'pagado' || p.estatus === 'a_favor') {
+        const key = CONCEPTOS_CAJON.includes(p.concepto) ? 'Adicionales' : p.concepto;
+        map[key] = (map[key] || 0) + Number(p.monto);
+      } else if (esVencido(p, hoyStr)) {
+        map['Pagos en Mora'] = (map['Pagos en Mora'] || 0) + Number(p.saldoPendiente || p.monto);
+      }
     });
     return Object.entries(map).map(([name, value]) => ({
       name,
@@ -3393,11 +3453,13 @@ function App() {
   }, [pagosFiltrados]);
   const dataBars = useMemo(() => {
     const map = {};
+    const hoyStr = new Date().toISOString().split('T')[0];
     MESES_S.forEach(m => {
       map[m] = {
         mes: m,
         Recaudado: 0,
-        Pendiente: 0
+        Pendiente: 0,
+        'En Mora': 0
       };
     });
     pagos.filter(p => !p.cancelado && new Date(fechaEfectiva(p) + 'T00:00:00').getFullYear() === Number(fAno === 'todos' ? now.getFullYear() : fAno)).forEach(p => {
@@ -3405,6 +3467,12 @@ function App() {
       // FIX: incluir 'a_favor' como Recaudado (dinero que ya entro, aunque este sin aplicar)
       if (p.estatus === 'pagado' || p.estatus === 'a_favor') map[m].Recaudado += Number(p.monto);
       else if (p.estatus === 'pendiente') map[m].Pendiente += Number(p.monto);
+    });
+    // "En Mora" se calcula aparte, agrupando por el mes de la fecha del CARGO (no fechaEfectiva,
+    // ya que un cargo vencido nunca se pago), solo para cargos que ya vencieron a hoy.
+    pagos.filter(p => !p.cancelado && esVencido(p, hoyStr) && new Date(p.fecha + 'T00:00:00').getFullYear() === Number(fAno === 'todos' ? now.getFullYear() : fAno)).forEach(p => {
+      const m = MESES_S[new Date(p.fecha + 'T00:00:00').getMonth()];
+      map[m]['En Mora'] += Number(p.saldoPendiente || p.monto);
     });
     return Object.values(map);
   }, [pagos, fAno]);
@@ -3646,12 +3714,16 @@ function App() {
     className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
   }, /*#__PURE__*/React.createElement("option", {
     value: "todos"
-  }, "Todos conceptos"), CONCEPTOS.map(c => /*#__PURE__*/React.createElement("option", {
+  }, "Todos conceptos"), CONCEPTOS.filter(c => c !== 'Otros').map(c => /*#__PURE__*/React.createElement("option", {
     key: c,
     value: c
   }, c)), /*#__PURE__*/React.createElement("option", {
+    value: "Pagos en Mora"
+  }, "Pagos en Mora"), /*#__PURE__*/React.createElement("option", {
     value: "Saldo a Favor"
-  }, "Saldo a Favor")), /*#__PURE__*/React.createElement("select", {
+  }, "Saldo a Favor"), /*#__PURE__*/React.createElement("option", {
+    value: "Otros"
+  }, "Otros")), /*#__PURE__*/React.createElement("select", {
     value: fEst,
     onChange: e => setFEst(e.target.value),
     className: "px-2 py-2 border border-gray-300 rounded-lg text-xs focus:outline-none"
@@ -3796,6 +3868,10 @@ function App() {
   }), /*#__PURE__*/React.createElement(Bar, {
     dataKey: "Pendiente",
     fill: C.gold,
+    radius: [4, 4, 0, 0]
+  }), /*#__PURE__*/React.createElement(Bar, {
+    dataKey: "En Mora",
+    fill: CONCEPTO_COLOR['Pagos en Mora'],
     radius: [4, 4, 0, 0]
   })))), /*#__PURE__*/React.createElement("div", {
     className: "bg-white rounded-xl shadow-sm border border-gray-200 p-5"
