@@ -935,8 +935,8 @@ function ModalImport({
           setErr('Archivo vac o');
           return;
         }
-        const esHoriz = Object.keys(data[0]).includes('Local');
-        const reqCols = tipo === 'pagos' ? esHoriz ? ['Local', 'Fecha'] : ['Locales', 'Concepto', 'Fecha'] : ['Fecha', 'Concepto', 'Monto'];
+        const esHoriz = Object.keys(data[0]).includes('Local') && !Object.keys(data[0]).includes('Concepto');
+        const reqCols = tipo === 'pagos' ? esHoriz ? ['Local', 'Fecha'] : (Object.keys(data[0]).includes('Locales') ? ['Locales', 'Concepto', 'Fecha'] : ['Local', 'Concepto', 'Fecha']) : ['Fecha', 'Concepto', 'Monto'];
         const miss = reqCols.filter(c => !Object.keys(data[0]).includes(c));
         if (miss.length) {
           setErr(`Columnas faltantes: ${miss.join(', ')}`);
@@ -2529,7 +2529,12 @@ function App() {
         rows.forEach(r => {
           const montoVal = Number(String(r.Monto || '').replace(/[$, ]/g, ''));
           if (!r.Monto || isNaN(montoVal) || montoVal <= 0) return;
-          const locales = String(r.Locales || '').split(',').map(x => x.trim()).filter(Boolean);
+          // Acepta tanto 'Locales' (plural, formato manual con varios locales separados por
+          // coma) como 'Local' (singular, usado por la plantilla de Abonos que genera el
+          // propio sistema) - antes solo se leia 'Locales', por lo que la plantilla de
+          // Abonos (que trae 'Local') nunca importaba nada.
+          const localesRaw = r.Locales !== undefined ? r.Locales : r.Local;
+          const locales = String(localesRaw || '').split(',').map(x => x.trim()).filter(Boolean);
           const tipoMovImp = String(r.Tipo || 'cargo').toLowerCase();
           locales.forEach(uid => {
             b.set(dbRef.current.collection('pagos').doc(), {
