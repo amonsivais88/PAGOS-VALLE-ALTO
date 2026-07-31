@@ -99,12 +99,16 @@ const PIE_COLORS = ['#0B2545', '#C9A961', '#2C2F36', '#1B7F5A', '#E07B39', '#0E6
 
 /* Conceptos que se agrupan en "Adicionales" en la dona del dashboard */
 const CONCEPTOS_CAJON = ['Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Acceso', 'Totem'];
-const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Bodegas', 'Acceso', 'Tarjetas de Acceso', 'Totem', 'Otros'];
-// "Pagos en Mora" es una categoria CALCULADA (cargos pendientes ya vencidos), no un concepto
-// que se elija al capturar un cargo/abono - por eso no esta en CONCEPTOS, solo se usa como
-// opcion sintetica de filtro (igual que "Saldo a Favor") y en graficas/reportes.
-// ORDEN_REPORTE define el orden visual completo (conceptos reales + las 2 categorias
-// sinteticas) para el dropdown de filtro y para el prompt del reporte mensual.
+// "Pagos en Mora" es un concepto REAL y seleccionable (se usa al registrar un ABONO que cubre
+// adeudo atrasado de meses/conceptos anteriores). No es un estatus calculado - es simplemente
+// otro concepto de ingreso, para poder identificar cuanto dinero entro especificamente por
+// cobranza de atrasos. Su unica particularidad es en como se APLICA el abono (ver
+// aplicarAbonoSobrePendientes): en vez de buscar cargos pendientes del mismo concepto, busca
+// cargos VENCIDOS de cualquier concepto (el adeudo real que se esta liquidando).
+const CONCEPTOS = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Bodegas', 'Acceso', 'Tarjetas de Acceso', 'Totem', 'Pagos en Mora', 'Otros'];
+// ORDEN_REPORTE define el orden visual completo (conceptos reales + "Saldo a Favor", que si
+// sigue siendo sintetico/no seleccionable, solo se crea automaticamente) para el dropdown de
+// filtro y para el prompt del reporte mensual.
 const ORDEN_REPORTE = ['Cuota de Mantenimiento', 'Servicios', 'Estacionamiento', 'Bodegas', 'Acceso', 'Tarjetas de Acceso', 'Totem', 'Pagos en Mora', 'Saldo a Favor', 'Otros'];
 // Colores fijos por concepto para coherencia visual
 const CONCEPTO_COLOR = {
@@ -116,13 +120,30 @@ const CONCEPTO_COLOR = {
   'Acceso':                 '#6B4E71', // morado
   'Totem':                  '#B45309', // ambar
   'Adicionales':            '#0E6BA8', // azul claro (grupo)
-  'Pagos en Mora':          '#DC2626', // rojo (cargos vencidos)
+  'Pagos en Mora':          '#9333EA', // morado/violeta (dinero recuperado de atrasos)
   'Saldo a Favor':          '#1D4ED8', // azul brillante
   'Otros':                  '#64748B', // gris
 };
 const getConceptoColor = c => CONCEPTO_COLOR[c] || '#64748B';
-// Un cargo pendiente esta "en mora" si ya paso su fecha de vencimiento
+// Un cargo pendiente esta "vencido" si ya paso su fecha de vencimiento. Se usa para que un
+// abono de concepto "Pagos en Mora" sepa contra que cargos aplicarse (ver mas abajo).
 const esVencido = (p, hoyStr) => p.tipoMov === 'cargo' && p.estatus === 'pendiente' && p.fechaVencimiento && p.fechaVencimiento < hoyStr;
+// Un cargo cuyo metodoPago es 'Saldo a Favor' o 'Pagos en Mora' NO debe contarse como
+// recaudado en el mes de SU PROPIA fecha (fechaEfectiva), porque ese dinero ya se conto
+// (o se cuenta) en otro lugar: Saldo a Favor ya se conto cuando se genero el credito; Pagos
+// en Mora se cuenta aparte, en el mes en que realmente se cobro el atraso (ver mas abajo).
+const esCubiertoPorOtroMedio = p => p.metodoPago === 'Saldo a Favor' || p.metodoPago === 'Pagos en Mora';
+// Cuanto de este registro cuenta como recaudado en SU PROPIO mes (fechaEfectiva). Normalmente
+// para 'pagado' es el monto completo, pero cuando un cargo parcial de un mes se termino de
+// liquidar en OTRO mes distinto (ver aplicarAbonoSobrePendientes), montoPagado guarda SOLO lo
+// que realmente se cobro en el mes original — el resto se registra aparte como "Pagos en Mora"
+// en el mes en que en verdad llego, para no inflar el mes de la deuda original.
+const montoRecaudadoPropio = p => {
+  if (p.estatus === 'pagado') return Number(p.montoPagado != null ? p.montoPagado : p.monto);
+  if (p.estatus === 'parcial') return Number(p.montoPagado || 0);
+  if (p.estatus === 'a_favor') return Number(p.monto);
+  return 0;
+};
 
 // Fecha efectiva para "recaudado": si ya se pago, cuenta el mes en que se pago realmente (no el mes del cargo)
 const fechaEfectiva = p => ((p.estatus === 'pagado' || p.estatus === 'parcial') && p.fechaPago) ? p.fechaPago : p.fecha;
@@ -2157,7 +2178,12 @@ function App() {
     const hoy = fechaPago || new Date().toISOString().split('T')[0];
     const metodo = metodoPago || 'Transferencia';
     let cargosRaw = snap.docs.map(d => ({id: d.id, ...d.data()}));
-    if (concepto) {
+    if (concepto === 'Pagos en Mora') {
+      // Un abono de "Pagos en Mora" liquida el adeudo VENCIDO real, sin importar de que
+      // concepto original era (Mantenimiento, Servicios, etc.) - por eso NO se filtra por
+      // concepto igual, se filtra por cargos que ya estan vencidos (fechaVencimiento pasada).
+      cargosRaw = cargosRaw.filter(c => esVencido(c, hoy));
+    } else if (concepto) {
       cargosRaw = cargosRaw.filter(c => c.concepto === concepto);
     }
     if (cargosRaw.length === 0) {
@@ -2171,7 +2197,7 @@ function App() {
         estatus: 'a_favor',
         cancelado: false,
         conceptoOrigen: concepto || null,
-        nota: concepto ? ('Abono de ' + concepto + ' sin cargos pendientes de ese concepto') : 'Abono sin cargos pendientes',
+        nota: concepto === 'Pagos en Mora' ? 'Abono de Pagos en Mora sin cargos vencidos que liquidar' : (concepto ? ('Abono de ' + concepto + ' sin cargos pendientes de ese concepto') : 'Abono sin cargos pendientes'),
         createdAt: new Date().toISOString()
       });
       return 0;
@@ -2188,22 +2214,76 @@ function App() {
       if (montoRestante <= 0) break;
       const cargo = cargos[i];
       const saldoPendiente = Number(cargo.saldoPendiente || cargo.monto);
+      // Se separa el dinero recien aplicado a un movimiento "Pagos en Mora" (en vez de
+      // sumarlo directo al cargo original) en dos casos:
+      // 1) El cargo YA estaba 'parcial' de un mes distinto al de hoy - evita que se
+      //    reclasifique TODO su monto (incluido lo ya cobrado antes) hacia el mes de este
+      //    nuevo abono.
+      // 2) El abono se registro explicitamente con concepto "Pagos en Mora" - aunque el
+      //    cargo fuera 100% pendiente, el punto de elegir ese concepto es que el pago cuente
+      //    como recaudado en el mes en que realmente se cobro el atraso, no en el mes de la
+      //    deuda original.
+      // En ambos casos, el cargo original se marca 'pagado'/'parcial' (para que su estatus
+      // quede correcto) pero SIN sumar el monto nuevo a su propio mes.
+      const eraParcialOtroMes = cargo.estatus === 'parcial' && String(cargo.fechaPago || '').slice(0, 7) !== String(hoy).slice(0, 7);
+      const debeSepararComoMora = eraParcialOtroMes || concepto === 'Pagos en Mora';
       if (montoRestante >= saldoPendiente) {
-        batch.update(db.collection('pagos').doc(cargo.id), {
-          estatus: 'pagado', fechaPago: hoy, metodoPago: metodo,
-          montoPagado: Number(cargo.monto), saldoPendiente: 0,
+        const montoAplicadoAqui = saldoPendiente;
+        const updData = {
+          estatus: 'pagado', metodoPago: metodo,
+          // Si se separa como mora, montoPagado se queda en lo que YA se habia cobrado en su
+          // propio mes (0 si nunca se habia tocado) - el resto se registra aparte como Pagos
+          // en Mora, para que este cargo no infle su propio mes con dinero que llego despues.
+          montoPagado: debeSepararComoMora ? Number(cargo.montoPagado || 0) : Number(cargo.monto),
+          saldoPendiente: 0,
           updatedAt: new Date().toISOString(), nota: 'Liquidado con abono'
-        });
+        };
+        if (!debeSepararComoMora) updData.fechaPago = hoy;
+        batch.update(db.collection('pagos').doc(cargo.id), updData);
         montoRestante -= saldoPendiente;
         cargosLiquidados++;
+        if (debeSepararComoMora && montoAplicadoAqui > 0.01) {
+          batch.set(db.collection('pagos').doc(), {
+            unidadId: uid,
+            concepto: 'Pagos en Mora',
+            monto: montoAplicadoAqui,
+            fecha: hoy,
+            fechaPago: hoy,
+            folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
+            tipoMov: 'abono',
+            estatus: 'pagado',
+            metodoPago: metodo,
+            cancelado: false,
+            nota: 'Liquidacion de saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
+            createdAt: new Date().toISOString()
+          });
+        }
       } else if (montoRestante > 0) {
         const montoPagadoPrev = Number(cargo.montoPagado || 0);
-        batch.update(db.collection('pagos').doc(cargo.id), {
-          estatus: 'parcial', fechaPago: hoy, metodoPago: metodo,
-          montoPagado: montoPagadoPrev + montoRestante,
+        const updData = {
+          estatus: 'parcial', metodoPago: metodo,
+          montoPagado: debeSepararComoMora ? montoPagadoPrev : (montoPagadoPrev + montoRestante),
           saldoPendiente: saldoPendiente - montoRestante,
           updatedAt: new Date().toISOString(), nota: 'Pago parcial'
-        });
+        };
+        if (!debeSepararComoMora) updData.fechaPago = hoy;
+        batch.update(db.collection('pagos').doc(cargo.id), updData);
+        if (debeSepararComoMora && montoRestante > 0.01) {
+          batch.set(db.collection('pagos').doc(), {
+            unidadId: uid,
+            concepto: 'Pagos en Mora',
+            monto: montoRestante,
+            fecha: hoy,
+            fechaPago: hoy,
+            folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
+            tipoMov: 'abono',
+            estatus: 'pagado',
+            metodoPago: metodo,
+            cancelado: false,
+            nota: 'Abono adicional sobre saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
+            createdAt: new Date().toISOString()
+          });
+        }
         montoRestante = 0;
       }
     }
@@ -2709,10 +2789,8 @@ function App() {
     });
     const fy = doc.lastAutoTable.finalY + 8;
     const rec = datos.reduce((s, p) => {
-      if (p.metodoPago === 'Saldo a Favor' || p.cancelado) return s;
-      if (p.estatus === 'pagado') return s + Number(p.monto);
-      if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
-      return s;
+      if (esCubiertoPorOtroMedio(p) || p.cancelado) return s;
+      return s + montoRecaudadoPropio(p);
     }, 0);
     const pen = datos.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     doc.setFontSize(10);
@@ -2998,12 +3076,9 @@ function App() {
     // del que realmente ya habia entrado (la parte cobrada de cada pago parcial se perdia).
     const ingConc = {};
     pagosMes.forEach(p => {
-      if (p.metodoPago === 'Saldo a Favor') return;
-      let monto = 0;
-      if (p.estatus === 'pagado') monto = Number(p.monto);
-      else if (p.estatus === 'parcial') monto = Number(p.montoPagado || 0);
-      else if (p.estatus === 'a_favor') monto = Number(p.monto);
-      else return;
+      if (esCubiertoPorOtroMedio(p)) return;
+      const monto = montoRecaudadoPropio(p);
+      if (monto <= 0) return;
       ingConc[p.concepto] = (ingConc[p.concepto] || 0) + monto;
     });
     const totalIngMes = Object.values(ingConc).reduce((s, v) => s + v, 0);
@@ -3016,16 +3091,14 @@ function App() {
     // mas abajo, despues de construir serieMes, siguiendo la formula:
     // Saldo del Mes = Saldo Mes Anterior + Ingresos del Mes - Gastos del Mes
     const morosos = new Set(pagosMes.filter(p => p.estatus === 'pendiente').map(p => normUid(p.unidadId)));
-    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor').map(p => normUid(p.unidadId)));
+    const alCorriente = new Set(pagosMes.filter(p => p.estatus === 'pagado' && !esCubiertoPorOtroMedio(p)).map(p => normUid(p.unidadId)));
     const soloMorosos = [...morosos].filter(id => !alCorriente.has(id));
     // Igual que ingConc/desgloseMes: se incluye la parte ya cobrada (montoPagado) y la parte
     // aun pendiente (saldoPendiente) de los cargos 'parcial', para que "Cumplimiento cobranza"
     // no ignore los pagos a medias.
     const montoPagado = pagosMes.reduce((s, p) => {
-      if (p.metodoPago === 'Saldo a Favor') return s;
-      if (p.estatus === 'pagado') return s + Number(p.monto);
-      if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
-      return s;
+      if (esCubiertoPorOtroMedio(p)) return s;
+      return s + montoRecaudadoPropio(p);
     }, 0);
     const montoPendiente = pagosMes.reduce((s, p) => {
       if (p.estatus === 'pendiente') return s + Number(p.monto);
@@ -3038,10 +3111,6 @@ function App() {
     // del cargo, por lo que un reporte de Mayo incluia por error adeudos de Junio/Julio
     // (cargos que aun no correspondia cobrar al corte de Mayo).
     const cortePeriodo = ano + '-' + String(mes).padStart(2, '0') + '-' + String(new Date(ano, mes, 0).getDate()).padStart(2, '0');
-    // Total de cargos que ya estaban vencidos (pendiente + fechaVencimiento < corte del mes
-    // del reporte). Es informativo: NO se suma a totalIngMes (no es dinero cobrado), solo se
-    // muestra dentro del listado ordenado de CAP I si es mayor a cero.
-    const montoMoraCorte = pagos.filter(p => !p.cancelado && esVencido(p, cortePeriodo)).reduce((s, p) => s + Number(p.saldoPendiente || p.monto), 0);
     const mapMor = {};
     pagos.filter(p => !p.cancelado && p.estatus === 'pendiente' && String(p.fecha || '') <= cortePeriodo).forEach(p => {
       const uid = normUid(p.unidadId);
@@ -3053,17 +3122,14 @@ function App() {
     // previo). Los meses posteriores al mes del reporte se dejan en null (no se muestran con
     // $0.00, que daba la falsa impresion de que ya se sabia el resultado de meses futuros).
     const finAnoAnteriorStr = (ano - 1) + '-12-31';
-    const ingresosAntesDelAno = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && p.metodoPago !== 'Saldo a Favor' && String(fechaEfectiva(p) || '') <= finAnoAnteriorStr).reduce((s, p) => s + (p.estatus === 'pagado' ? Number(p.monto) : Number(p.montoPagado || 0)), 0);
+    const ingresosAntesDelAno = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && !esCubiertoPorOtroMedio(p) && String(fechaEfectiva(p) || '') <= finAnoAnteriorStr).reduce((s, p) => s + montoRecaudadoPropio(p), 0);
     const gastosAntesDelAno = gastos.filter(g => String(g.fecha || '') <= finAnoAnteriorStr).reduce((s, g) => s + Number(g.monto), 0);
     let cumSaldo = ingresosAntesDelAno - gastosAntesDelAno;
     const serieMes = MESES_S.map((m, i) => {
       if (i + 1 > mes) {
         return { m, ing: null, gOp: null, gEx: null, gTot: null, saldo: null };
       }
-      const ing = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && p.metodoPago !== 'Saldo a Favor' && new Date(fechaEfectiva(p) + 'T00:00:00').getMonth() === i && new Date(fechaEfectiva(p) + 'T00:00:00').getFullYear() === ano).reduce((s, p) => {
-        if (p.estatus === 'pagado') return s + Number(p.monto);
-        return s + Number(p.montoPagado || 0);
-      }, 0);
+      const ing = pagos.filter(p => !p.cancelado && (p.estatus === 'pagado' || p.estatus === 'parcial') && !esCubiertoPorOtroMedio(p) && new Date(fechaEfectiva(p) + 'T00:00:00').getMonth() === i && new Date(fechaEfectiva(p) + 'T00:00:00').getFullYear() === ano).reduce((s, p) => s + montoRecaudadoPropio(p), 0);
       const gOp = gastos.filter(g => (g.tipoGasto === 'operativo' || !g.tipoGasto) && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       const gEx = gastos.filter(g => g.tipoGasto === 'extraordinario' && new Date(g.fecha + 'T00:00:00').getMonth() === i && new Date(g.fecha + 'T00:00:00').getFullYear() === ano).reduce((s, g) => s + Number(g.monto), 0);
       const gTot = gOp + gEx;
@@ -3091,11 +3157,9 @@ function App() {
       .reduce((s, p) => s + Number(p.monto), 0);
     const desgloseMes = {};
     pagosMes.forEach(p => {
-      if (p.metodoPago === 'Saldo a Favor') return;
-      let monto = 0;
-      if (p.estatus === 'pagado') monto = Number(p.monto);
-      else if (p.estatus === 'parcial') monto = Number(p.montoPagado || 0);
-      else return;
+      if (esCubiertoPorOtroMedio(p) || p.estatus === 'a_favor') return;
+      const monto = montoRecaudadoPropio(p);
+      if (monto <= 0) return;
       desgloseMes[p.concepto] = (desgloseMes[p.concepto] || 0) + monto;
     });
     const mesActualStr2 = ano + '-' + String(mes).padStart(2,'0');
@@ -3119,8 +3183,8 @@ function App() {
       const f = new Date(fechaEfectiva(p) + 'T00:00:00');
       return f.getMonth() + 1 === mesAntNum && f.getFullYear() === anoAntNum;
     });
-    const ingMesAnt = pagosMesAnt.filter(p => p.estatus === 'pagado' && p.metodoPago !== 'Saldo a Favor')
-      .reduce((s, p) => s + Number(p.monto), 0);
+    const ingMesAnt = pagosMesAnt.filter(p => p.estatus === 'pagado' && !esCubiertoPorOtroMedio(p))
+      .reduce((s, p) => s + montoRecaudadoPropio(p), 0);
     const gastosMesAnt = gastos.filter(g => {
       const f = new Date(g.fecha + 'T00:00:00');
       return f.getMonth() + 1 === mesAntNum && f.getFullYear() === anoAntNum;
@@ -3170,13 +3234,14 @@ function App() {
     L.push('   - Fondo blanco, borde izquierdo grueso en dorado, icono SVG, valor grande, variacion vs mes anterior' + NL);
     L.push('B) GRAFICA DE BARRAS DOBLE — Ingresos vs Gastos por mes (Chart.js Bar, azul marino vs dorado)' + NL);
     L.push('   Si la seccion CAP I: INGRESOS DEL MES POR CONCEPTO incluye "Pagos en Mora", agrega una' + NL);
-    L.push('   tercera serie de barras en rojo #DC2626 con ese monto (es informativo: cargos ya vencidos,' + NL);
-    L.push('   no se suma al total de ingresos ni de gastos)' + NL);
+    L.push('   tercera serie de barras en morado #9333EA con ese monto: es dinero REAL cobrado ese mes' + NL);
+    L.push('   por atrasos de meses anteriores (ya esta incluido dentro del total de Ingresos, esta barra' + NL);
+    L.push('   solo lo desglosa visualmente para ver cuanto de lo cobrado fue cobranza de mora)' + NL);
     L.push('C) GRAFICA DE LINEA — Saldo de Caja acumulado mensual (Chart.js Line, color verde)' + NL);
     L.push('D) GRAFICA DE DONA — Desglose de ingresos por concepto (Chart.js Doughnut, paleta institucional)' + NL);
-    L.push('   Usa el mismo orden y colores de CAP I: INGRESOS DEL MES POR CONCEPTO. Si aparece "Pagos en' + NL);
-    L.push('   Mora" en esa lista, agregalo como segmento adicional en rojo #DC2626 (informativo, no se' + NL);
-    L.push('   suma al total de la dona de ingresos, se muestra aparte con su propia leyenda/tooltip)' + NL);
+    L.push('   Usa el mismo orden y colores de CAP I: INGRESOS DEL MES POR CONCEPTO. "Pagos en Mora" es' + NL);
+    L.push('   un concepto de ingreso mas (color morado #9333EA) y SI suma al total de la dona, igual que' + NL);
+    L.push('   Mantenimiento o Servicios' + NL);
     L.push('E) MAPA DE LOCALES — Grid visual de 87 celdas representando cada local del edificio' + NL);
     L.push('   Verde=#1B7F5A si al corriente, Rojo=#A6273A si con adeudo, Dorado=#C9A961 si saldo a favor' + NL);
     L.push('   IMPORTANTE: el color de cada local se determina UNICAMENTE cruzando su numero contra las' + NL);
@@ -3209,8 +3274,8 @@ function App() {
 
     L.push('--- CAP I: INGRESOS DEL MES POR CONCEPTO ---' + NL);
     ORDEN_REPORTE.forEach(c => {
-      const v = c === 'Pagos en Mora' ? montoMoraCorte : (ingConc[c] || 0);
-      if (v > 0) L.push('  ' + c + ': ' + fN(v) + (c === 'Pagos en Mora' ? ' (informativo, cargos vencidos - no se suma al total de ingresos)' : '') + NL);
+      const v = ingConc[c] || 0;
+      if (v > 0) L.push('  ' + c + ': ' + fN(v) + NL);
     });
     L.push('  TOTAL: ' + fN(totalIngMes) + NL + NL);
 
@@ -3342,10 +3407,7 @@ function App() {
       }
       if (fLocal !== 'todos' && p.unidadId !== fLocal) return false;
       if (fEst !== 'todos' && p.estatus !== fEst) return false;
-      if (fConc === 'Pagos en Mora') {
-        const hoyStr = new Date().toISOString().split('T')[0];
-        if (!esVencido(p, hoyStr)) return false;
-      } else if (fConc !== 'todos' && p.concepto !== fConc) return false;
+      if (fConc !== 'todos' && p.concepto !== fConc) return false;
       if (fBusq) {
         const q = fBusq.toLowerCase();
         if (!p.unidadId.toLowerCase().includes(q) && !p.concepto.toLowerCase().includes(q) && !(p.folio || '').toLowerCase().includes(q)) return false;
@@ -3382,11 +3444,8 @@ function App() {
     // FIX: "Total Recaudado" ahora incluye tambien los registros con estatus 'a_favor',
     // porque ese dinero SI entro a la cuenta, aunque quede como credito sin aplicar.
     const rec = pagosFiltrados.reduce((s, p) => {
-      if (p.metodoPago === 'Saldo a Favor' || p.cancelado) return s;
-      if (p.estatus === 'pagado') return s + Number(p.monto);
-      if (p.estatus === 'parcial') return s + Number(p.montoPagado || 0);
-      if (p.estatus === 'a_favor') return s + Number(p.monto);
-      return s;
+      if (esCubiertoPorOtroMedio(p) || p.cancelado) return s;
+      return s + montoRecaudadoPropio(p);
     }, 0);
     const pen = pagosFiltrados.filter(p => p.estatus === 'pendiente').reduce((s, p) => s + Number(p.monto), 0);
     const tot = rec + pen;
@@ -3437,14 +3496,9 @@ function App() {
   // DONA AGRUPADA: estacionamiento/bodega/tarjetas/acceso/totem en un solo segmento "Adicionales"
   const dataDona = useMemo(() => {
     const map = {};
-    const hoyStr = new Date().toISOString().split('T')[0];
-    pagosFiltrados.forEach(p => {
-      if (p.estatus === 'pagado' || p.estatus === 'a_favor') {
-        const key = CONCEPTOS_CAJON.includes(p.concepto) ? 'Adicionales' : p.concepto;
-        map[key] = (map[key] || 0) + Number(p.monto);
-      } else if (esVencido(p, hoyStr)) {
-        map['Pagos en Mora'] = (map['Pagos en Mora'] || 0) + Number(p.saldoPendiente || p.monto);
-      }
+    pagosFiltrados.filter(p => p.estatus === 'pagado' || p.estatus === 'a_favor').forEach(p => {
+      const key = CONCEPTOS_CAJON.includes(p.concepto) ? 'Adicionales' : p.concepto;
+      map[key] = (map[key] || 0) + montoRecaudadoPropio(p);
     });
     return Object.entries(map).map(([name, value]) => ({
       name,
@@ -3453,26 +3507,25 @@ function App() {
   }, [pagosFiltrados]);
   const dataBars = useMemo(() => {
     const map = {};
-    const hoyStr = new Date().toISOString().split('T')[0];
     MESES_S.forEach(m => {
       map[m] = {
         mes: m,
         Recaudado: 0,
         Pendiente: 0,
-        'En Mora': 0
+        'Pagos en Mora': 0
       };
     });
     pagos.filter(p => !p.cancelado && new Date(fechaEfectiva(p) + 'T00:00:00').getFullYear() === Number(fAno === 'todos' ? now.getFullYear() : fAno)).forEach(p => {
       const m = MESES_S[new Date(fechaEfectiva(p) + 'T00:00:00').getMonth()];
       // FIX: incluir 'a_favor' como Recaudado (dinero que ya entro, aunque este sin aplicar)
-      if (p.estatus === 'pagado' || p.estatus === 'a_favor') map[m].Recaudado += Number(p.monto);
+      if (p.estatus === 'pagado' || p.estatus === 'a_favor') {
+        const monto = montoRecaudadoPropio(p);
+        map[m].Recaudado += monto;
+        // "Pagos en Mora" es un desglose informativo DENTRO de Recaudado (dinero real que
+        // entro este mes por cobranza de atrasos), no una categoria aparte de deuda.
+        if (p.concepto === 'Pagos en Mora') map[m]['Pagos en Mora'] += monto;
+      }
       else if (p.estatus === 'pendiente') map[m].Pendiente += Number(p.monto);
-    });
-    // "En Mora" se calcula aparte, agrupando por el mes de la fecha del CARGO (no fechaEfectiva,
-    // ya que un cargo vencido nunca se pago), solo para cargos que ya vencieron a hoy.
-    pagos.filter(p => !p.cancelado && esVencido(p, hoyStr) && new Date(p.fecha + 'T00:00:00').getFullYear() === Number(fAno === 'todos' ? now.getFullYear() : fAno)).forEach(p => {
-      const m = MESES_S[new Date(p.fecha + 'T00:00:00').getMonth()];
-      map[m]['En Mora'] += Number(p.saldoPendiente || p.monto);
     });
     return Object.values(map);
   }, [pagos, fAno]);
@@ -3718,8 +3771,6 @@ function App() {
     key: c,
     value: c
   }, c)), /*#__PURE__*/React.createElement("option", {
-    value: "Pagos en Mora"
-  }, "Pagos en Mora"), /*#__PURE__*/React.createElement("option", {
     value: "Saldo a Favor"
   }, "Saldo a Favor"), /*#__PURE__*/React.createElement("option", {
     value: "Otros"
@@ -3870,7 +3921,7 @@ function App() {
     fill: C.gold,
     radius: [4, 4, 0, 0]
   }), /*#__PURE__*/React.createElement(Bar, {
-    dataKey: "En Mora",
+    dataKey: "Pagos en Mora",
     fill: CONCEPTO_COLOR['Pagos en Mora'],
     radius: [4, 4, 0, 0]
   })))), /*#__PURE__*/React.createElement("div", {
