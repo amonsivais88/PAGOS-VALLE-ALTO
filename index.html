@@ -1211,16 +1211,25 @@ function TabSaldos({
     const map = {};
     unidades.forEach(u => {
       map[u.id] = {
-        cargos: 0,
-        abonos: 0
+        pagado: 0,
+        pendiente: 0,
+        favorBruto: 0,
+        cargosConFavor: 0
       };
     });
     pagos.filter(p => !p.cancelado && p.estatus !== 'liquidado').forEach(p => {
       if (!map[p.unidadId]) return;
-      if (p.tipoMov === 'abono' || p.estatus === 'a_favor') {
-        map[p.unidadId].abonos += Number(p.monto);
-      } else {
-        map[p.unidadId].cargos += Number(p.monto);
+      if (p.estatus === 'a_favor') {
+        map[p.unidadId].favorBruto += Number(p.monto);
+        return;
+      }
+      if (p.tipoMov === 'cargo') {
+        if (p.metodoPago === 'Saldo a Favor') map[p.unidadId].cargosConFavor += Number(p.monto);
+        if (p.estatus === 'pendiente') map[p.unidadId].pendiente += Number(p.monto);
+        else if (p.estatus === 'parcial') map[p.unidadId].pendiente += Number(p.saldoPendiente || 0);
+        if (!esCubiertoPorOtroMedio(p)) map[p.unidadId].pagado += montoRecaudadoPropio(p);
+      } else if (p.tipoMov === 'abono') {
+        map[p.unidadId].pagado += Number(p.monto);
       }
     });
     return map;
@@ -1241,10 +1250,13 @@ function TabSaldos({
   const resumen = useMemo(() => {
     return unidades.map(u => {
       const s = saldosPorLocal[u.id] || {
-        cargos: 0,
-        abonos: 0
+        pagado: 0,
+        pendiente: 0,
+        favorBruto: 0,
+        cargosConFavor: 0
       };
-      const saldo = s.abonos - s.cargos;
+      const favorNeto = Math.max(0, s.favorBruto - s.cargosConFavor);
+      const saldo = favorNeto - s.pendiente;
       const grave = moraGrave.has(u.id);
       let estado = 'corriente';
       if (saldo > 0) estado = 'a_favor';else if (saldo < 0) estado = grave ? 'mora_grave' : 'pendiente';
@@ -1253,8 +1265,8 @@ function TabSaldos({
         codigo: u.codigo,
         piso: u.piso,
         tipo: u.tipo,
-        cargos: s.cargos,
-        abonos: s.abonos,
+        cargos: s.pendiente,
+        abonos: s.pagado + s.favorBruto,
         saldo,
         estado,
         grave
@@ -2498,18 +2510,21 @@ function App() {
     if (!dbRef.current) return 0;
     try {
       const snap = await dbRef.current.collection('pagos').where('unidadId', '==', uid).where('cancelado', '==', false).get();
-      let abonos = 0,
-        cargos = 0;
+      let saldoFavorBruto = 0,
+        cargosPagadosConFavor = 0;
       snap.docs.forEach(d => {
         const p = d.data();
         if (p.estatus === 'liquidado') return; // se ignora por completo, como si nunca hubiera existido
-        if (p.tipoMov === 'abono' || p.estatus === 'a_favor') {
-          abonos += Number(p.monto);
-        } else {
-          cargos += Number(p.monto);
+        if (p.estatus === 'a_favor') {
+          saldoFavorBruto += Number(p.monto);
+        } else if (p.tipoMov === 'cargo' && p.metodoPago === 'Saldo a Favor') {
+          // Solo los cargos que realmente se cubrieron CON el credito restan el disponible -
+          // no todos los cargos que el local haya tenido alguna vez (esos se pagaron o siguen
+          // pendientes por su cuenta, sin tocar el saldo a favor).
+          cargosPagadosConFavor += Number(p.monto);
         }
       });
-      return Math.max(0, abonos - cargos);
+      return Math.max(0, saldoFavorBruto - cargosPagadosConFavor);
     } catch (e) {
       return 0;
     }
