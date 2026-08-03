@@ -125,9 +125,25 @@ const CONCEPTO_COLOR = {
   'Otros':                  '#64748B', // gris
 };
 const getConceptoColor = c => CONCEPTO_COLOR[c] || '#64748B';
+// Fecha de vencimiento efectiva de un cargo: usa el campo fechaVencimiento si esta guardado,
+// y si no (ej. cargos capturados manualmente via "Registrar Pago", que historicamente nunca
+// lo seteaban), lo calcula como el ultimo dia del mes de su propia fecha - mismo criterio que
+// ya se usa para los cargos de mantenimiento auto-generados. Sin este respaldo, un cargo
+// manual nunca se consideraba "vencido" sin importar cuantos meses de atraso tuviera.
+const fechaVencimientoEfectiva = p => {
+  if (p.fechaVencimiento) return p.fechaVencimiento;
+  if (!p.fecha) return null;
+  const d = new Date(p.fecha + 'T00:00:00');
+  if (isNaN(d)) return null;
+  const ult = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(ult.getDate()).padStart(2, '0');
+};
 // Un cargo pendiente esta "vencido" si ya paso su fecha de vencimiento. Se usa para que un
 // abono de concepto "Pagos en Mora" sepa contra que cargos aplicarse (ver mas abajo).
-const esVencido = (p, hoyStr) => p.tipoMov === 'cargo' && p.estatus === 'pendiente' && p.fechaVencimiento && p.fechaVencimiento < hoyStr;
+const esVencido = (p, hoyStr) => {
+  const fv = fechaVencimientoEfectiva(p);
+  return p.tipoMov === 'cargo' && p.estatus === 'pendiente' && fv && fv < hoyStr;
+};
 // Un cargo cuyo metodoPago es 'Saldo a Favor' o 'Pagos en Mora' NO debe contarse como
 // recaudado en el mes de SU PROPIA fecha (fechaEfectiva), porque ese dinero ya se conto
 // (o se cuenta) en otro lugar: Saldo a Favor ya se conto cuando se genero el credito; Pagos
@@ -1196,9 +1212,7 @@ function TabSaldos({
   esAdmin,
   db,
   showToast,
-  calcSaldoFavor,
-  aplicarAbonoSobrePendientes,
-  setSyncingGlobal
+  aplicarAbonoSobrePendientes
 }) {
   const [ajusteLocal, setAjusteLocal] = useState(null);
   const [ajusteMonto, setAjusteMonto] = useState('');
@@ -1294,18 +1308,14 @@ function TabSaldos({
     }
     setAjusteSaving(true);
     try {
-      await db.collection('pagos').add({
-        unidadId: ajusteLocal,
-        concepto: 'Ajuste de Saldo',
-        monto: Number(ajusteMonto),
-        fecha: new Date().toISOString().split('T')[0],
-        folio: 'AJUSTE-' + Date.now().toString().slice(-6),
-        estatus: 'a_favor',
-        cancelado: false,
-        nota: ajusteNota || '',
-        createdAt: new Date().toISOString()
-      });
-      showToast('Ajuste registrado', 'ok');
+      const hoy = new Date().toISOString().split('T')[0];
+      const b = db.batch();
+      // El ajuste ahora se compensa automaticamente contra deuda pendiente existente (igual
+      // que cualquier abono normal) - solo lo que sobre despues de cubrir lo que se deba
+      // queda como Saldo a Favor. Antes creaba el credito directo, sin buscar deuda vieja.
+      const liq = await aplicarAbonoSobrePendientes(ajusteLocal, Number(ajusteMonto), b, db, hoy, 'Ajuste Manual', undefined);
+      await b.commit();
+      showToast(liq > 0 ? ('Ajuste registrado: ' + liq + ' cargo(s) liquidado(s)') : 'Ajuste registrado como saldo a favor', 'ok');
       setAjusteLocal(null);
       setAjusteMonto('');
       setAjusteNota('');
@@ -1322,31 +1332,6 @@ function TabSaldos({
       await db.collection('pagos').doc(id).update({cancelado: true, canceledAt: new Date().toISOString()});
       showToast('Ajuste eliminado', 'ok');
     } catch(e) { showToast('Error: ' + e.message, 'err'); }
-  };
-  // Toma el saldo a favor disponible de un local (credito ya depositado pero sin aplicar) y
-  // lo usa para liquidar su deuda VENCIDA, reutilizando la misma logica de "Pagos en Mora"
-  // (aplicarAbonoSobrePendientes con concepto='Pagos en Mora' busca cargos vencidos de
-  // cualquier concepto). Antes, un saldo a favor nuevo solo se aplicaba automaticamente a
-  // cargos que se crearan DESPUES - nunca iba hacia atras a limpiar deuda vieja ya existente.
-  const reaplicarSaldoFavor = async uid => {
-    if (!esAdmin || !db) return;
-    if (setSyncingGlobal) setSyncingGlobal(true);
-    try {
-      const disponible = await calcSaldoFavor(uid);
-      if (disponible <= 0) {
-        showToast('Este local no tiene saldo a favor disponible para reaplicar', 'err');
-        if (setSyncingGlobal) setSyncingGlobal(false);
-        return;
-      }
-      const hoy = new Date().toISOString().split('T')[0];
-      const b = db.batch();
-      const liq = await aplicarAbonoSobrePendientes(uid, disponible, b, db, hoy, 'Saldo a Favor', 'Pagos en Mora');
-      await b.commit();
-      showToast(liq > 0 ? ('Saldo a favor reaplicado: ' + liq + ' cargo(s) liquidado(s)') : 'No se encontro deuda vencida que liquidar con ese saldo', liq > 0 ? 'ok' : 'err');
-    } catch (e) {
-      showToast('Error: ' + e.message, 'err');
-      if (setSyncingGlobal) setSyncingGlobal(false);
-    }
   };
 
 
@@ -1516,11 +1501,7 @@ function TabSaldos({
       }
     }, ce.label), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-center"
-    }, esAdmin && (r.estado === 'pendiente' || r.estado === 'mora_grave') && /*#__PURE__*/React.createElement("button", {
-      onClick: () => reaplicarSaldoFavor(r.id),
-      className: "text-xs text-blue-600 hover:text-blue-800 underline font-medium",
-      title: "Usar el saldo a favor disponible del local para liquidar su deuda vencida"
-    }, "Reaplicar"), esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("button", {
+    }, esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("button", {
       onClick: () => {
         var aj = pagos.filter(function(p){return !p.cancelado && p.unidadId===r.id && p.estatus==='a_favor';});
         if(aj.length>0) eliminarAjuste(aj[aj.length-1].id);
@@ -2247,128 +2228,121 @@ function App() {
     const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', 'in', ['pendiente', 'parcial']).where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
     const hoy = fechaPago || new Date().toISOString().split('T')[0];
     const metodo = metodoPago || 'Transferencia';
-    let cargosRaw = snap.docs.map(d => ({id: d.id, ...d.data()}));
+    const cargosTodos = snap.docs.map(d => ({id: d.id, ...d.data()}));
+    const procesadosIds = new Set();
+    var montoRestante = montoAbono;
+    var cargosLiquidados = 0;
+
+    // Aplica montoRestante contra una lista de cargos ya ordenada, actualizando el batch.
+    // forzarMora=true trata TODOS los cargos de esa lista como si fueran de otro mes/concepto
+    // (se separa el dinero a un registro "Pagos en Mora" en vez de sumarlo directo al cargo,
+    // para no inflar retroactivamente el mes original del cargo).
+    const procesarLista = (lista, forzarMora) => {
+      for (var i = 0; i < lista.length && montoRestante > 0; i++) {
+        const cargo = lista[i];
+        if (procesadosIds.has(cargo.id)) continue;
+        procesadosIds.add(cargo.id);
+        const saldoPendiente = Number(cargo.saldoPendiente || cargo.monto);
+        // Se separa a un registro "Pagos en Mora" (en vez de sumarlo directo al cargo) cada
+        // vez que el cargo es de un mes DISTINTO al de hoy - sin importar si ya venia parcial
+        // o si nunca se habia tocado. Ejemplo: un cargo de julio pagado en agosto siempre se
+        // separa, aunque julio estuviera 100% pendiente hasta ese momento - lo que importa es
+        // que el dinero llego en un mes distinto al de la deuda, para que julio no cuente como
+        // recaudado en agosto y agosto si refleje ese ingreso bajo "Pagos en Mora".
+        const cargoDeOtroMes = String(cargo.fecha || '').slice(0, 7) !== String(hoy).slice(0, 7);
+        const debeSepararComoMora = forzarMora || cargoDeOtroMes || concepto === 'Pagos en Mora';
+        if (montoRestante >= saldoPendiente) {
+          const montoAplicadoAqui = saldoPendiente;
+          const updData = {
+            estatus: 'pagado', metodoPago: metodo,
+            montoPagado: debeSepararComoMora ? Number(cargo.montoPagado || 0) : Number(cargo.monto),
+            saldoPendiente: 0,
+            updatedAt: new Date().toISOString(),
+            nota: debeSepararComoMora ? ('Liquidado con ' + fmt(montoAplicadoAqui) + ' via Pagos en Mora folio MORA-' + (cargo.folio || cargo.id).toString().slice(-8)) : 'Liquidado con abono'
+          };
+          if (!debeSepararComoMora) updData.fechaPago = hoy;
+          batch.update(db.collection('pagos').doc(cargo.id), updData);
+          montoRestante -= saldoPendiente;
+          cargosLiquidados++;
+          if (debeSepararComoMora && montoAplicadoAqui > 0.01) {
+            batch.set(db.collection('pagos').doc(), {
+              unidadId: uid,
+              concepto: 'Pagos en Mora',
+              monto: montoAplicadoAqui,
+              fecha: hoy,
+              fechaPago: hoy,
+              folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
+              tipoMov: 'abono',
+              estatus: 'pagado',
+              metodoPago: metodo === 'Saldo a Favor' ? 'Saldo a Favor (reaplicado)' : metodo,
+              cancelado: false,
+              nota: 'Liquidacion de saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
+              createdAt: new Date().toISOString()
+            });
+          }
+        } else if (montoRestante > 0) {
+          const montoPagadoPrev = Number(cargo.montoPagado || 0);
+          const updData = {
+            estatus: 'parcial', metodoPago: metodo,
+            montoPagado: debeSepararComoMora ? montoPagadoPrev : (montoPagadoPrev + montoRestante),
+            saldoPendiente: saldoPendiente - montoRestante,
+            updatedAt: new Date().toISOString(),
+            nota: debeSepararComoMora ? ('Se aplicaron ' + fmt(montoRestante) + ' via Pagos en Mora folio MORA-' + (cargo.folio || cargo.id).toString().slice(-8) + ' (no se suma aqui para no inflar este mes)') : 'Pago parcial'
+          };
+          if (!debeSepararComoMora) updData.fechaPago = hoy;
+          batch.update(db.collection('pagos').doc(cargo.id), updData);
+          if (debeSepararComoMora && montoRestante > 0.01) {
+            batch.set(db.collection('pagos').doc(), {
+              unidadId: uid,
+              concepto: 'Pagos en Mora',
+              monto: montoRestante,
+              fecha: hoy,
+              fechaPago: hoy,
+              folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
+              tipoMov: 'abono',
+              estatus: 'pagado',
+              metodoPago: metodo === 'Saldo a Favor' ? 'Saldo a Favor (reaplicado)' : metodo,
+              cancelado: false,
+              nota: 'Abono adicional sobre saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
+              createdAt: new Date().toISOString()
+            });
+          }
+          montoRestante = 0;
+        }
+      }
+    };
+
+    // PASADA 1: cargos que coinciden con el criterio original (mismo concepto, o vencidos de
+    // cualquier concepto si el abono es explicitamente "Pagos en Mora", o todos por prioridad
+    // si no se especifico concepto - ej. conciliacion bancaria).
+    let candidatos1 = cargosTodos;
     if (concepto === 'Pagos en Mora') {
-      // Un abono de "Pagos en Mora" liquida el adeudo VENCIDO real, sin importar de que
-      // concepto original era (Mantenimiento, Servicios, etc.) - por eso NO se filtra por
-      // concepto igual, se filtra por cargos que ya estan vencidos (fechaVencimiento pasada).
-      cargosRaw = cargosRaw.filter(c => esVencido(c, hoy));
+      candidatos1 = candidatos1.filter(c => esVencido(c, hoy));
     } else if (concepto) {
-      cargosRaw = cargosRaw.filter(c => c.concepto === concepto);
+      candidatos1 = candidatos1.filter(c => c.concepto === concepto);
     }
-    if (cargosRaw.length === 0) {
-      batch.set(db.collection('pagos').doc(), {
-        unidadId: uid,
-        concepto: 'Saldo a Favor',
-        monto: montoAbono,
-        fecha: hoy,
-        folio: 'A FAVOR',
-        tipoMov: 'abono',
-        estatus: 'a_favor',
-        cancelado: false,
-        conceptoOrigen: concepto || null,
-        nota: concepto === 'Pagos en Mora' ? 'Abono de Pagos en Mora sin cargos vencidos que liquidar' : (concepto ? ('Abono de ' + concepto + ' sin cargos pendientes de ese concepto') : 'Abono sin cargos pendientes'),
-        createdAt: new Date().toISOString()
-      });
-      return 0;
-    }
-    const cargos = cargosRaw.sort((a, b) => {
+    candidatos1 = candidatos1.sort((a, b) => {
       if (concepto) return String(a.fecha || '').localeCompare(String(b.fecha || ''));
       const pA = prioridadConcepto(a.concepto), pB = prioridadConcepto(b.concepto);
       if (pA !== pB) return pA - pB;
       return String(a.fecha || '').localeCompare(String(b.fecha || ''));
     });
-    var montoRestante = montoAbono;
-    var cargosLiquidados = 0;
-    for (var i = 0; i < cargos.length; i++) {
-      if (montoRestante <= 0) break;
-      const cargo = cargos[i];
-      const saldoPendiente = Number(cargo.saldoPendiente || cargo.monto);
-      // Se separa el dinero recien aplicado a un movimiento "Pagos en Mora" (en vez de
-      // sumarlo directo al cargo original) en dos casos:
-      // 1) El cargo YA estaba 'parcial' de un mes distinto al de hoy - evita que se
-      //    reclasifique TODO su monto (incluido lo ya cobrado antes) hacia el mes de este
-      //    nuevo abono.
-      // 2) El abono se registro explicitamente con concepto "Pagos en Mora" - aunque el
-      //    cargo fuera 100% pendiente, el punto de elegir ese concepto es que el pago cuente
-      //    como recaudado en el mes en que realmente se cobro el atraso, no en el mes de la
-      //    deuda original.
-      // En ambos casos, el cargo original se marca 'pagado'/'parcial' (para que su estatus
-      // quede correcto) pero SIN sumar el monto nuevo a su propio mes.
-      const eraParcialOtroMes = cargo.estatus === 'parcial' && String(cargo.fechaPago || '').slice(0, 7) !== String(hoy).slice(0, 7);
-      const debeSepararComoMora = eraParcialOtroMes || concepto === 'Pagos en Mora';
-      if (montoRestante >= saldoPendiente) {
-        const montoAplicadoAqui = saldoPendiente;
-        const updData = {
-          estatus: 'pagado', metodoPago: metodo,
-          // Si se separa como mora, montoPagado se queda en lo que YA se habia cobrado en su
-          // propio mes (0 si nunca se habia tocado) - el resto se registra aparte como Pagos
-          // en Mora, para que este cargo no infle su propio mes con dinero que llego despues.
-          montoPagado: debeSepararComoMora ? Number(cargo.montoPagado || 0) : Number(cargo.monto),
-          saldoPendiente: 0,
-          updatedAt: new Date().toISOString(),
-          nota: debeSepararComoMora ? ('Liquidado con ' + fmt(montoAplicadoAqui) + ' via Pagos en Mora folio MORA-' + (cargo.folio || cargo.id).toString().slice(-8)) : 'Liquidado con abono'
-        };
-        if (!debeSepararComoMora) updData.fechaPago = hoy;
-        batch.update(db.collection('pagos').doc(cargo.id), updData);
-        montoRestante -= saldoPendiente;
-        cargosLiquidados++;
-        if (debeSepararComoMora && montoAplicadoAqui > 0.01) {
-          batch.set(db.collection('pagos').doc(), {
-            unidadId: uid,
-            concepto: 'Pagos en Mora',
-            monto: montoAplicadoAqui,
-            fecha: hoy,
-            fechaPago: hoy,
-            folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
-            tipoMov: 'abono',
-            estatus: 'pagado',
-            // Si el origen es 'Saldo a Favor' exacto, se reetiqueta aqui (solo en este
-            // registro de seguimiento) para que NO quede excluido del recaudado del mes via
-            // esCubiertoPorOtroMedio - el cargo original si necesita quedar con metodoPago
-            // exacto 'Saldo a Favor' (para que genEdoCuenta descuente el credito ya usado),
-            // pero este registro debe contar como el dinero real que se esta reconociendo hoy.
-            metodoPago: metodo === 'Saldo a Favor' ? 'Saldo a Favor (reaplicado)' : metodo,
-            cancelado: false,
-            nota: 'Liquidacion de saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
-            createdAt: new Date().toISOString()
-          });
-        }
-      } else if (montoRestante > 0) {
-        const montoPagadoPrev = Number(cargo.montoPagado || 0);
-        const updData = {
-          estatus: 'parcial', metodoPago: metodo,
-          montoPagado: debeSepararComoMora ? montoPagadoPrev : (montoPagadoPrev + montoRestante),
-          saldoPendiente: saldoPendiente - montoRestante,
-          updatedAt: new Date().toISOString(),
-          nota: debeSepararComoMora ? ('Se aplicaron ' + fmt(montoRestante) + ' via Pagos en Mora folio MORA-' + (cargo.folio || cargo.id).toString().slice(-8) + ' (no se suma aqui para no inflar este mes)') : 'Pago parcial'
-        };
-        if (!debeSepararComoMora) updData.fechaPago = hoy;
-        batch.update(db.collection('pagos').doc(cargo.id), updData);
-        if (debeSepararComoMora && montoRestante > 0.01) {
-          batch.set(db.collection('pagos').doc(), {
-            unidadId: uid,
-            concepto: 'Pagos en Mora',
-            monto: montoRestante,
-            fecha: hoy,
-            fechaPago: hoy,
-            folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
-            tipoMov: 'abono',
-            estatus: 'pagado',
-            // Si el origen es 'Saldo a Favor' exacto, se reetiqueta aqui (solo en este
-            // registro de seguimiento) para que NO quede excluido del recaudado del mes via
-            // esCubiertoPorOtroMedio - el cargo original si necesita quedar con metodoPago
-            // exacto 'Saldo a Favor' (para que genEdoCuenta descuente el credito ya usado),
-            // pero este registro debe contar como el dinero real que se esta reconociendo hoy.
-            metodoPago: metodo === 'Saldo a Favor' ? 'Saldo a Favor (reaplicado)' : metodo,
-            cancelado: false,
-            nota: 'Abono adicional sobre saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
-            createdAt: new Date().toISOString()
-          });
-        }
-        montoRestante = 0;
-      }
+    procesarLista(candidatos1, false);
+
+    // PASADA 2 (BARRIDO AUTOMATICO): si sobra dinero y el abono tenia un concepto especifico
+    // (no "Pagos en Mora", que ya barrio todo en la pasada 1, y no vacio, que ya uso prioridad
+    // entre todos los conceptos), se intenta aplicar el remanente contra deuda VENCIDA de
+    // CUALQUIER OTRO concepto antes de mandarlo a Saldo a Favor. Esto es lo que antes hacia
+    // "Pagos en Mora" solo si se elegia ese concepto a mano - ahora es automatico para
+    // cualquier abono, sin necesidad de un boton aparte, y sin reintroducir el bug de mezclar
+    // conceptos en cargos que AUN no estan vencidos (esVencido exige que ya haya pasado su
+    // fecha de vencimiento, nunca toca cargos recientes de otro concepto).
+    if (montoRestante > 0.01 && concepto && concepto !== 'Pagos en Mora') {
+      const candidatos2 = cargosTodos.filter(c => !procesadosIds.has(c.id) && esVencido(c, hoy))
+        .sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
+      procesarLista(candidatos2, true);
     }
+
     if (montoRestante > 0.01) {
       batch.set(db.collection('pagos').doc(), {
         unidadId: uid,
@@ -2380,7 +2354,7 @@ function App() {
         estatus: 'a_favor',
         cancelado: false,
         conceptoOrigen: concepto || null,
-        nota: 'Remanente de abono de ' + fmt(montoAbono) + (concepto ? ' (' + concepto + ')' : ''),
+        nota: 'Remanente de abono de ' + fmt(montoAbono) + (concepto ? ' (' + concepto + ')' : '') + (cargosTodos.length === 0 ? ' - sin cargos pendientes' : ''),
         createdAt: new Date().toISOString()
       });
     }
@@ -2537,6 +2511,9 @@ function App() {
       const abonosAGuardar = [];
       for (const r of rs) {
         var reg = { ...r };
+        if (r.tipoMov === 'cargo' && !reg.fechaVencimiento) {
+          reg.fechaVencimiento = fechaVencimientoEfectiva(r);
+        }
         if (r.tipoMov === 'cargo' && r.estatus === 'pendiente') {
           var sf = await calcSaldoFavor(r.unidadId);
           if (sf >= r.monto) {
@@ -3009,10 +2986,11 @@ function App() {
       // formalmente a un cargo especifico todavia.
       let recargoInfo = null;
       if (incluirRecargos) {
-        const vencidosCorte = todosPagosLocalEC.filter(p =>
-          p.tipoMov === 'cargo' && (p.estatus === 'pendiente' || p.estatus === 'parcial') &&
-          p.fechaVencimiento && p.fechaVencimiento < corteRecargoStr
-        );
+        const vencidosCorte = todosPagosLocalEC.filter(p => {
+          if (p.tipoMov !== 'cargo' || (p.estatus !== 'pendiente' && p.estatus !== 'parcial')) return false;
+          const fv = fechaVencimientoEfectiva(p);
+          return fv && fv < corteRecargoStr;
+        });
         const totalVencidoBruto = vencidosCorte.reduce((s, p) => s + Number(p.estatus === 'parcial' ? (p.saldoPendiente || 0) : p.monto), 0);
         const baseRecargo = Math.max(0, totalVencidoBruto - saldoFavor);
         const montoRecargo = Math.round(baseRecargo * 0.15 * 100) / 100;
@@ -4318,7 +4296,8 @@ function App() {
     className: "px-4 py-3 text-center"
   }, (() => {
     const hoy = new Date();
-    const venc = p.estatus === 'pendiente' && p.fechaVencimiento && new Date(p.fechaVencimiento + 'T23:59:59') < hoy;
+    const fvEfectiva = fechaVencimientoEfectiva(p);
+    const venc = p.estatus === 'pendiente' && fvEfectiva && new Date(fvEfectiva + 'T23:59:59') < hoy;
     const bg = p.estatus === 'pagado' ? '#D1FAE5' : p.estatus === 'a_favor' ? '#DBEAFE' : p.estatus === 'liquidado' ? '#EDE9FE' : p.estatus === 'parcial' ? '#FEF3C7' : venc ? '#FEE2E2' : '#FEF3C7';
     const clr = p.estatus === 'pagado' ? '#1B7F5A' : p.estatus === 'a_favor' ? '#1D4ED8' : p.estatus === 'liquidado' ? '#6D28D9' : p.estatus === 'parcial' ? '#B45309' : venc ? '#A6273A' : '#B45309';
     const lbl = p.estatus === 'pagado' ? 'PAGADO' : p.estatus === 'a_favor' ? 'A FAVOR' : p.estatus === 'liquidado' ? 'LIQUIDADO' : p.estatus === 'parcial' ? 'PARCIAL' : venc ? 'VENCIDO' : 'PENDIENTE';
@@ -4345,12 +4324,12 @@ function App() {
     }, lbl), p.estatus === 'parcial' && /*#__PURE__*/React.createElement("span", {
       className: "text-[9px] font-medium",
       style: {color: '#B45309'}
-    }, fmt(p.montoPagado || 0), " / ", fmt(p.saldoPendiente || 0)), venc && p.fechaVencimiento && /*#__PURE__*/React.createElement("span", {
+    }, fmt(p.montoPagado || 0), " / ", fmt(p.saldoPendiente || 0)), venc && fvEfectiva && /*#__PURE__*/React.createElement("span", {
       className: "text-[9px]",
       style: {
         color: '#EF4444'
       }
-    }, "Vencio: ", p.fechaVencimiento));
+    }, "Vencio: ", fvEfectiva));
   })()), /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-3 text-center"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4501,9 +4480,7 @@ function App() {
     esAdmin: esAdmin,
     db: dbRef.current,
     showToast: showToast,
-    calcSaldoFavor: calcSaldoFavor,
-    aplicarAbonoSobrePendientes: aplicarAbonoSobrePendientes,
-    setSyncingGlobal: setSyncing
+    aplicarAbonoSobrePendientes: aplicarAbonoSobrePendientes
   }), tab === 'gastos' && /*#__PURE__*/React.createElement("div", {
     className: "space-y-5"
   }, /*#__PURE__*/React.createElement("div", {
