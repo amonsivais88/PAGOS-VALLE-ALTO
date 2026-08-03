@@ -699,6 +699,7 @@ function ModalEdo({
   const [mesH, setMesH] = useState(now.getMonth() + 1);
   const [anoH, setAnoH] = useState(now.getFullYear());
   const [tipo, setTipo] = useState('ambos');
+  const [incluirRecargos, setIncluirRecargos] = useState(false);
   const anos = [now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1];
   return /*#__PURE__*/React.createElement(Modal, {
     title: "Generar Estado de Cuenta",
@@ -770,14 +771,30 @@ function ModalEdo({
     style: {
       backgroundColor: tipo === v ? C.navy : undefined
     }
-  }, l)))), /*#__PURE__*/React.createElement("button", {
+  }, l)))), /*#__PURE__*/React.createElement("label", {
+    className: "flex items-center gap-2 p-3 rounded-lg cursor-pointer text-sm",
+    style: {
+      background: incluirRecargos ? '#FEF3C7' : '#F9FAFB',
+      border: '1px solid ' + (incluirRecargos ? '#FDE68A' : '#E5E7EB')
+    }
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: incluirRecargos,
+    onChange: e => setIncluirRecargos(e.target.checked),
+    className: "rounded"
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("span", {
+    className: "font-semibold text-gray-700"
+  }, "Incluir recargos por mora (15%)"), /*#__PURE__*/React.createElement("span", {
+    className: "block text-xs text-gray-500 mt-0.5"
+  }, "Se calcula solo sobre saldos de meses ya vencidos (no el mes en curso), descontando saldo a favor disponible. Es informativo, no crea cargos nuevos en el sistema."))), /*#__PURE__*/React.createElement("button", {
     onClick: () => uids.length > 0 && onGen({
       uids,
       mesD,
       anoD,
       mesH,
       anoH,
-      tipo
+      tipo,
+      incluirRecargos
     }),
     disabled: uids.length === 0,
     className: "w-full py-2.5 rounded-lg text-white font-medium text-sm transition hover:opacity-90 disabled:opacity-40",
@@ -1195,7 +1212,7 @@ function TabSaldos({
         abonos: 0
       };
     });
-    pagos.filter(p => !p.cancelado).forEach(p => {
+    pagos.filter(p => !p.cancelado && p.estatus !== 'liquidado').forEach(p => {
       if (!map[p.unidadId]) return;
       if (p.tipoMov === 'abono' || p.estatus === 'a_favor') {
         map[p.unidadId].abonos += Number(p.monto);
@@ -2236,7 +2253,8 @@ function App() {
           // en Mora, para que este cargo no infle su propio mes con dinero que llego despues.
           montoPagado: debeSepararComoMora ? Number(cargo.montoPagado || 0) : Number(cargo.monto),
           saldoPendiente: 0,
-          updatedAt: new Date().toISOString(), nota: 'Liquidado con abono'
+          updatedAt: new Date().toISOString(),
+          nota: debeSepararComoMora ? ('Liquidado con ' + fmt(montoAplicadoAqui) + ' via Pagos en Mora folio MORA-' + (cargo.folio || cargo.id).toString().slice(-8)) : 'Liquidado con abono'
         };
         if (!debeSepararComoMora) updData.fechaPago = hoy;
         batch.update(db.collection('pagos').doc(cargo.id), updData);
@@ -2264,7 +2282,8 @@ function App() {
           estatus: 'parcial', metodoPago: metodo,
           montoPagado: debeSepararComoMora ? montoPagadoPrev : (montoPagadoPrev + montoRestante),
           saldoPendiente: saldoPendiente - montoRestante,
-          updatedAt: new Date().toISOString(), nota: 'Pago parcial'
+          updatedAt: new Date().toISOString(),
+          nota: debeSepararComoMora ? ('Se aplicaron ' + fmt(montoRestante) + ' via Pagos en Mora folio MORA-' + (cargo.folio || cargo.id).toString().slice(-8) + ' (no se suma aqui para no inflar este mes)') : 'Pago parcial'
         };
         if (!debeSepararComoMora) updData.fechaPago = hoy;
         batch.update(db.collection('pagos').doc(cargo.id), updData);
@@ -2432,6 +2451,7 @@ function App() {
         cargos = 0;
       snap.docs.forEach(d => {
         const p = d.data();
+        if (p.estatus === 'liquidado') return; // se ignora por completo, como si nunca hubiera existido
         if (p.tipoMov === 'abono' || p.estatus === 'a_favor') {
           abonos += Number(p.monto);
         } else {
@@ -2498,6 +2518,10 @@ function App() {
     try {
       const b = dbRef.current.batch();
       let total = 0;
+      // Los abonos NO se guardan como documento independiente aqui - se acumulan y se
+      // aplican despues via aplicarAbonoSobrePendientes, para que compensen cargos ya
+      // existentes en vez de dejarlos pendientes y crear un registro duplicado.
+      const abonosImportados = [];
       if (esHorizontal) {
         const VARS_COLS = ['Servicios', 'Estacionamiento', 'Tarjetas de Acceso', 'Bodegas', 'Acceso', 'Totem', 'Otros'];
         rows.forEach(r => {
@@ -2511,6 +2535,11 @@ function App() {
             if (!montoRaw && montoRaw !== 0) return;
             const monto = Number(String(montoRaw).replace(/[$, ]/g, ''));
             if (isNaN(monto) || monto <= 0) return;
+            if (tipoMovH === 'abono') {
+              abonosImportados.push({ unidadId: uid, monto, fecha, concepto: conc });
+              total++;
+              return;
+            }
             b.set(dbRef.current.collection('pagos').doc(), {
               unidadId: uid,
               concepto: conc,
@@ -2518,7 +2547,7 @@ function App() {
               fecha,
               folio,
               tipoMov: tipoMovH,
-              estatus: tipoMovH === 'abono' ? 'pagado' : 'pendiente',
+              estatus: 'pendiente',
               cancelado: false,
               createdAt: new Date().toISOString()
             });
@@ -2537,6 +2566,11 @@ function App() {
           const locales = String(localesRaw || '').split(',').map(x => x.trim()).filter(Boolean);
           const tipoMovImp = String(r.Tipo || 'cargo').toLowerCase();
           locales.forEach(uid => {
+            if (tipoMovImp === 'abono') {
+              abonosImportados.push({ unidadId: uid, monto: montoVal, fecha: excelFecha(r.Fecha), concepto: r.Concepto });
+              total++;
+              return;
+            }
             b.set(dbRef.current.collection('pagos').doc(), {
               unidadId: uid,
               concepto: r.Concepto,
@@ -2544,15 +2578,12 @@ function App() {
               fecha: excelFecha(r.Fecha),
               folio: String(r.Folio || ''),
               tipoMov: tipoMovImp,
-              estatus: tipoMovImp === 'abono' ? 'pagado' : 'pendiente',
+              estatus: 'pendiente',
               fechaVencimiento: (() => {
-                if (tipoMovImp === 'cargo') {
-                  const fd = excelFecha(r.Fecha);
-                  const d = new Date(fd + 'T00:00:00');
-                  const ult = new Date(d.getFullYear(), d.getMonth() + 1, 0);
-                  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(ult.getDate()).padStart(2, '0');
-                }
-                return null;
+                const fd = excelFecha(r.Fecha);
+                const d = new Date(fd + 'T00:00:00');
+                const ult = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+                return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(ult.getDate()).padStart(2, '0');
               })(),
               cancelado: false,
               createdAt: new Date().toISOString()
@@ -2562,7 +2593,19 @@ function App() {
         });
       }
       await b.commit();
-      showToast(total + ' registros importados', 'ok');
+      var totalLiqImp = 0;
+      if (abonosImportados.length > 0) {
+        for (var ai2 = 0; ai2 < abonosImportados.length; ai2++) {
+          const ab = abonosImportados[ai2];
+          const b2i = dbRef.current.batch();
+          const liq = await aplicarAbonoSobrePendientes(ab.unidadId, ab.monto, b2i, dbRef.current, ab.fecha, undefined, ab.concepto);
+          totalLiqImp += liq;
+          await b2i.commit();
+        }
+      }
+      var msgImp = total + ' registros importados';
+      if (totalLiqImp > 0) msgImp += ', ' + totalLiqImp + ' cargos liquidados automaticamente';
+      showToast(msgImp, 'ok');
       setMImport(false);
     } catch (e) {
       showToast('Error: ' + e.message, 'err');
@@ -2640,6 +2683,32 @@ function App() {
       if (n === 'pagado' && metodoPago) updateData.metodoPago = metodoPago;
       await dbRef.current.collection('pagos').doc(id).update(updateData);
       showToast('Marcado: ' + n.toUpperCase(), 'ok');
+    } catch (e) {
+      showToast(e.message, 'err');
+      setSyncing(false);
+    }
+  };
+  // Liquida un cargo pendiente/parcial: queda visible como LIQUIDADO, deja de contar como
+  // pendiente y NO se contabiliza como recaudado ni resta el saldo a favor del local (se
+  // trata en todos los calculos como si nunca hubiera existido, salvo por quedar visible
+  // en el historial para trazabilidad).
+  const liquidarCargo = async id => {
+    if (!esAdmin) return;
+    const p = pagos.find(x => x.id === id);
+    if (!p || p.tipoMov !== 'cargo' || (p.estatus !== 'pendiente' && p.estatus !== 'parcial')) return;
+    const motivo = window.prompt('Motivo de la liquidacion (opcional):', '');
+    if (motivo === null) return; // cancelo el prompt
+    setSyncing(true);
+    try {
+      await dbRef.current.collection('pagos').doc(id).update({
+        estatus: 'liquidado',
+        saldoPendiente: 0,
+        liquidadoPor: 'admin',
+        liquidadoEn: new Date().toISOString(),
+        nota: motivo ? ('Liquidado: ' + motivo) : 'Liquidado',
+        updatedAt: new Date().toISOString()
+      });
+      showToast('Cargo liquidado', 'ok');
     } catch (e) {
       showToast(e.message, 'err');
       setSyncing(false);
@@ -2813,13 +2882,19 @@ function App() {
     anoD,
     mesH,
     anoH,
-    tipo
+    tipo,
+    incluirRecargos
   }) => {
     await ensurePDF();
     const {
       jsPDF
     } = window.jspdf;
     const _delay = ms => new Promise(res => setTimeout(res, ms));
+    // Fecha de corte del "Hasta" seleccionado (ultimo dia de ese mes/ano). Un cargo cuenta
+    // como vencido para efectos de RECARGO solo si su fechaVencimiento es ANTERIOR a este
+    // corte - el mes del propio corte (ej. el mes en curso) nunca genera recargo, porque
+    // todavia tiene tiempo de pagarse.
+    const corteRecargoStr = anoH + '-' + String(mesH).padStart(2, '0') + '-' + String(new Date(anoH, mesH, 0).getDate()).padStart(2, '0');
   for (var _uidI = 0; _uidI < uids.length; _uidI++) {
     var uid = uids[_uidI];
     var docLocal = new jsPDF();
@@ -2837,23 +2912,47 @@ function App() {
         if (tipo !== 'ambos' && p.estatus !== tipo) return false;
         return true;
       }).sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
-      const totalCargos = movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'a_favor')
+      const totalCargos = movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'a_favor' && p.estatus !== 'liquidado')
         .reduce((s, p) => s + Number(p.monto), 0);
-      const tp = totalCargos - (movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
+      const tp = totalCargos - (movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'liquidado').reduce((s, p) => {
         if (p.estatus === 'pendiente') return s + Number(p.monto);
         if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
         return s;
       }, 0));
-      const td = movs.filter(p => p.tipoMov === 'cargo').reduce((s, p) => {
+      const td = movs.filter(p => p.tipoMov === 'cargo' && p.estatus !== 'liquidado').reduce((s, p) => {
         if (p.estatus === 'pendiente') return s + Number(p.monto);
         if (p.estatus === 'parcial') return s + Number(p.saldoPendiente || 0);
         return s;
       }, 0);
-      // FIX: el saldo a favor real es la suma directa de los documentos con estatus 'a_favor'
-      // (antes se calculaba por resta indirecta abonosTotalesRegistrados - tp, que fallaba
-      // cuando los cargos se marcaban pagados por una via distinta a un abono documentado)
-      const saldoFavor = movs.filter(p => p.estatus === 'a_favor')
-        .reduce((s, p) => s + Number(p.monto), 0);
+      // Saldo a Favor NETO real: total depositado como a_favor, menos lo que ya se uso para
+      // pagar cargos automaticamente con metodoPago='Saldo a Favor'. Antes solo se sumaban
+      // los depositos (saldoFavor bruto) sin restar lo ya consumido, por lo que el PDF seguia
+      // mostrando el monto original aunque ya se hubiera gastado en cargos pagados con ese
+      // credito. Se calcula sobre TODO el historial del local (no solo el periodo mostrado),
+      // porque el saldo a favor es un estado actual, no algo limitado al rango del reporte.
+      const todosPagosLocalEC = pagos.filter(p => p.unidadId === uid && !p.cancelado);
+      const saldoFavorBruto = todosPagosLocalEC.filter(p => p.estatus === 'a_favor').reduce((s, p) => s + Number(p.monto), 0);
+      const cargosPagadosConFavor = todosPagosLocalEC.filter(p => p.tipoMov === 'cargo' && p.metodoPago === 'Saldo a Favor').reduce((s, p) => s + Number(p.monto), 0);
+      const saldoFavor = Math.max(0, saldoFavorBruto - cargosPagadosConFavor);
+      // RECARGO POR MORA (informativo, no crea ningun registro en Firestore): 15% sobre el
+      // saldo realmente pendiente (saldoPendiente si es parcial, monto completo si es
+      // pendiente) de cargos cuya fechaVencimiento ya paso respecto al corte seleccionado -
+      // nunca sobre el mes en curso. Al total vencido se le resta el Saldo a Favor NETO
+      // disponible del local (ya calculado arriba) antes de aplicar el 15%, para no cobrar
+      // recargo sobre deuda que ya esta cubierta con credito aunque no se haya aplicado
+      // formalmente a un cargo especifico todavia.
+      let recargoInfo = null;
+      if (incluirRecargos) {
+        const vencidosCorte = todosPagosLocalEC.filter(p =>
+          p.tipoMov === 'cargo' && (p.estatus === 'pendiente' || p.estatus === 'parcial') &&
+          p.fechaVencimiento && p.fechaVencimiento < corteRecargoStr
+        );
+        const totalVencidoBruto = vencidosCorte.reduce((s, p) => s + Number(p.estatus === 'parcial' ? (p.saldoPendiente || 0) : p.monto), 0);
+        const baseRecargo = Math.max(0, totalVencidoBruto - saldoFavor);
+        const montoRecargo = Math.round(baseRecargo * 0.15 * 100) / 100;
+        const mesesInvolucrados = [...new Set(vencidosCorte.map(p => String(p.fecha || '').slice(0, 7)))].filter(Boolean).sort();
+        recargoInfo = { totalVencidoBruto, saldoFavorAplicado: Math.min(totalVencidoBruto, saldoFavor), baseRecargo, montoRecargo, mesesInvolucrados };
+      }
       docLocal.setFontSize(11);
       docLocal.setTextColor(11, 37, 69);
       docLocal.text('Local / Unidad: ' + uid, 14, startY);
@@ -2936,8 +3035,35 @@ function App() {
         docLocal.text(fmt(tp), 192, fy + 7, {align: 'right'});
       }
 
+      // Cuadro de RECARGO POR MORA (solo si se activo el checkbox y hay algo que cobrar).
+      // Informativo unicamente - no crea ningun registro en Firestore.
+      let alturaRecargo = 0;
+      if (recargoInfo && recargoInfo.montoRecargo > 0.005) {
+        const fyRec = fy + altoCuadro + 6;
+        alturaRecargo = 26;
+        docLocal.setFillColor(255, 251, 235);
+        docLocal.rect(14, fyRec, 182, 22, 'F');
+        docLocal.setDrawColor(253, 230, 138);
+        docLocal.rect(14, fyRec, 182, 22);
+        const mesesTxt = recargoInfo.mesesInvolucrados.map(m => {
+          const parts = m.split('-');
+          return (MESES_S[parseInt(parts[1]) - 1] || '') + ' ' + parts[0];
+        }).join(', ');
+        docLocal.setFontSize(9);
+        docLocal.setTextColor(180, 83, 9);
+        docLocal.text('RECARGO POR MORA (15%' + (mesesTxt ? ' s/vencido de ' + mesesTxt : '') + '):', 18, fyRec + 8);
+        docLocal.setFontSize(11);
+        docLocal.text(fmt(recargoInfo.montoRecargo), 192, fyRec + 8, { align: 'right' });
+        docLocal.setFontSize(7);
+        docLocal.setTextColor(146, 64, 14);
+        docLocal.text(
+          'Base: ' + fmt(recargoInfo.baseRecargo) + ' (vencido ' + fmt(recargoInfo.totalVencidoBruto) + ' - saldo a favor aplicado ' + fmt(recargoInfo.saldoFavorAplicado) + '). Informativo, no genera cargo en el sistema.',
+          18, fyRec + 16, { maxWidth: 174 }
+        );
+      }
+
       if (td > 0) {
-        const tyCards = fy + altoCuadro + 10;
+        const tyCards = fy + altoCuadro + alturaRecargo + 10;
         docLocal.setFontSize(9);
         docLocal.setTextColor(11, 37, 69);
         docLocal.text('DETALLE DE SALDOS PENDIENTES:', 14, tyCards);
@@ -2999,7 +3125,7 @@ function App() {
 
         startY = tyCards + 5 + (cardRow + 1) * (cardH + 4) + 8;
       } else {
-        startY = fy + altoCuadro + 8;
+        startY = fy + altoCuadro + alturaRecargo + 8;
       }
     docLocal.setFontSize(8);
     docLocal.setTextColor(120, 120, 120);
@@ -3793,7 +3919,9 @@ function App() {
     value: "parcial"
   }, "Parciales"), /*#__PURE__*/React.createElement("option", {
     value: "a_favor"
-  }, "Saldo a Favor")), /*#__PURE__*/React.createElement("div", {
+  }, "Saldo a Favor"), /*#__PURE__*/React.createElement("option", {
+    value: "liquidado"
+  }, "Liquidado")), /*#__PURE__*/React.createElement("div", {
     className: "relative"
   }, /*#__PURE__*/React.createElement(I.Search, {
     sz: 13,
@@ -4125,14 +4253,14 @@ function App() {
   }, (() => {
     const hoy = new Date();
     const venc = p.estatus === 'pendiente' && p.fechaVencimiento && new Date(p.fechaVencimiento + 'T23:59:59') < hoy;
-    const bg = p.estatus === 'pagado' ? '#D1FAE5' : p.estatus === 'a_favor' ? '#DBEAFE' : p.estatus === 'parcial' ? '#FEF3C7' : venc ? '#FEE2E2' : '#FEF3C7';
-    const clr = p.estatus === 'pagado' ? '#1B7F5A' : p.estatus === 'a_favor' ? '#1D4ED8' : p.estatus === 'parcial' ? '#B45309' : venc ? '#A6273A' : '#B45309';
-    const lbl = p.estatus === 'pagado' ? 'PAGADO' : p.estatus === 'a_favor' ? 'A FAVOR' : p.estatus === 'parcial' ? 'PARCIAL' : venc ? 'VENCIDO' : 'PENDIENTE';
+    const bg = p.estatus === 'pagado' ? '#D1FAE5' : p.estatus === 'a_favor' ? '#DBEAFE' : p.estatus === 'liquidado' ? '#EDE9FE' : p.estatus === 'parcial' ? '#FEF3C7' : venc ? '#FEE2E2' : '#FEF3C7';
+    const clr = p.estatus === 'pagado' ? '#1B7F5A' : p.estatus === 'a_favor' ? '#1D4ED8' : p.estatus === 'liquidado' ? '#6D28D9' : p.estatus === 'parcial' ? '#B45309' : venc ? '#A6273A' : '#B45309';
+    const lbl = p.estatus === 'pagado' ? 'PAGADO' : p.estatus === 'a_favor' ? 'A FAVOR' : p.estatus === 'liquidado' ? 'LIQUIDADO' : p.estatus === 'parcial' ? 'PARCIAL' : venc ? 'VENCIDO' : 'PENDIENTE';
     return /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col items-center gap-0.5"
     }, /*#__PURE__*/React.createElement("span", {
       onClick: () => {
-        if (p.cancelado || p.estatus === 'a_favor') return;
+        if (p.cancelado || p.estatus === 'a_favor' || p.estatus === 'liquidado') return;
         if (p.estatus !== 'pagado') {
           setConfPagoId(p.id);
           setConfPagoFecha(new Date().toISOString().split('T')[0]);
@@ -4190,6 +4318,15 @@ function App() {
     sz: 13,
     st: {
       color: '#2563EB'
+    }
+  })), p.tipoMov === 'cargo' && (p.estatus === 'pendiente' || p.estatus === 'parcial') && /*#__PURE__*/React.createElement("button", {
+    onClick: () => liquidarCargo(p.id),
+    className: "p-1.5 rounded hover:bg-purple-50 transition",
+    title: "Liquidar (no cuenta como recaudado ni resta saldo a favor)"
+  }, /*#__PURE__*/React.createElement(I.Award, {
+    sz: 13,
+    st: {
+      color: '#6D28D9'
     }
   })), /*#__PURE__*/React.createElement("button", {
     onClick: () => cancelar(p.id),
