@@ -1195,7 +1195,10 @@ function TabSaldos({
   pagos,
   esAdmin,
   db,
-  showToast
+  showToast,
+  calcSaldoFavor,
+  aplicarAbonoSobrePendientes,
+  setSyncingGlobal
 }) {
   const [ajusteLocal, setAjusteLocal] = useState(null);
   const [ajusteMonto, setAjusteMonto] = useState('');
@@ -1307,6 +1310,31 @@ function TabSaldos({
       await db.collection('pagos').doc(id).update({cancelado: true, canceledAt: new Date().toISOString()});
       showToast('Ajuste eliminado', 'ok');
     } catch(e) { showToast('Error: ' + e.message, 'err'); }
+  };
+  // Toma el saldo a favor disponible de un local (credito ya depositado pero sin aplicar) y
+  // lo usa para liquidar su deuda VENCIDA, reutilizando la misma logica de "Pagos en Mora"
+  // (aplicarAbonoSobrePendientes con concepto='Pagos en Mora' busca cargos vencidos de
+  // cualquier concepto). Antes, un saldo a favor nuevo solo se aplicaba automaticamente a
+  // cargos que se crearan DESPUES - nunca iba hacia atras a limpiar deuda vieja ya existente.
+  const reaplicarSaldoFavor = async uid => {
+    if (!esAdmin || !db) return;
+    if (setSyncingGlobal) setSyncingGlobal(true);
+    try {
+      const disponible = await calcSaldoFavor(uid);
+      if (disponible <= 0) {
+        showToast('Este local no tiene saldo a favor disponible para reaplicar', 'err');
+        if (setSyncingGlobal) setSyncingGlobal(false);
+        return;
+      }
+      const hoy = new Date().toISOString().split('T')[0];
+      const b = db.batch();
+      const liq = await aplicarAbonoSobrePendientes(uid, disponible, b, db, hoy, 'Saldo a Favor', 'Pagos en Mora');
+      await b.commit();
+      showToast(liq > 0 ? ('Saldo a favor reaplicado: ' + liq + ' cargo(s) liquidado(s)') : 'No se encontro deuda vencida que liquidar con ese saldo', liq > 0 ? 'ok' : 'err');
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+      if (setSyncingGlobal) setSyncingGlobal(false);
+    }
   };
 
 
@@ -1422,14 +1450,14 @@ function TabSaldos({
     style: {
       backgroundColor: '#F4F5F7'
     }
-  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Monto Pagado', 'Monto Pendiente', 'Ajuste a Favor', 'Estatus'].map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Monto Pagado', 'Monto Pendiente', 'Saldo Neto', 'Estatus', 'Acciones'].map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     className: 'px-4 py-3 font-semibold text-xs uppercase tracking-wider ' + (h === 'Local' ? 'text-left' : 'text-right last:text-center'),
     style: {
       color: '#0B2545'
     }
   }, h)))), /*#__PURE__*/React.createElement("tbody", null, filtrado.length === 0 ? /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("td", {
-    colSpan: 5,
+    colSpan: 6,
     className: "px-4 py-10 text-center text-gray-400"
   }, "Sin registros que coincidan")) : filtrado.map(r => {
     const ce = colEstado[r.estado] || colEstado.corriente;
@@ -1448,16 +1476,16 @@ function TabSaldos({
     }, "MORA"))), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-right",
       style: {
-        color: '#A6273A'
+        color: '#1B7F5A'
       }
-    }, r.cargos > 0 ? '$' + Number(r.cargos).toLocaleString('es-MX', {
+    }, r.abonos > 0 ? '$' + Number(r.abonos).toLocaleString('es-MX', {
       minimumFractionDigits: 2
     }) : '-'), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-right",
       style: {
-        color: '#1B7F5A'
+        color: '#A6273A'
       }
-    }, r.abonos > 0 ? '$' + Number(r.abonos).toLocaleString('es-MX', {
+    }, r.cargos > 0 ? '$' + Number(r.cargos).toLocaleString('es-MX', {
       minimumFractionDigits: 2
     }) : '-'), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-right font-bold",
@@ -1474,7 +1502,20 @@ function TabSaldos({
         backgroundColor: ce.bg,
         color: ce.color
       }
-    }, ce.label), esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("td", {className: "px-4 py-3 text-center"}, /*#__PURE__*/React.createElement("button", {onClick: function() { var aj = pagos.filter(function(p){return !p.cancelado && p.unidadId===r.id && p.estatus==='a_favor';}); if(aj.length>0) eliminarAjuste(aj[aj.length-1].id); }, className: "text-xs text-red-500 hover:text-red-700 underline font-medium", title: "Revertir ajuste a favor"}, "Revertir"))));
+    }, ce.label), /*#__PURE__*/React.createElement("td", {
+      className: "px-4 py-3 text-center"
+    }, esAdmin && (r.estado === 'pendiente' || r.estado === 'mora_grave') && /*#__PURE__*/React.createElement("button", {
+      onClick: () => reaplicarSaldoFavor(r.id),
+      className: "text-xs text-blue-600 hover:text-blue-800 underline font-medium",
+      title: "Usar el saldo a favor disponible del local para liquidar su deuda vencida"
+    }, "Reaplicar"), esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("button", {
+      onClick: () => {
+        var aj = pagos.filter(function(p){return !p.cancelado && p.unidadId===r.id && p.estatus==='a_favor';});
+        if(aj.length>0) eliminarAjuste(aj[aj.length-1].id);
+      },
+      className: "text-xs text-red-500 hover:text-red-700 underline font-medium",
+      title: "Revertir ajuste a favor"
+    }, "Revertir"))));
   }))))), ajusteLocal && /*#__PURE__*/React.createElement(Modal, {
 
     title: "Registrar Ajuste de Saldo",
@@ -2270,7 +2311,12 @@ function App() {
             folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
             tipoMov: 'abono',
             estatus: 'pagado',
-            metodoPago: metodo,
+            // Si el origen es 'Saldo a Favor' exacto, se reetiqueta aqui (solo en este
+            // registro de seguimiento) para que NO quede excluido del recaudado del mes via
+            // esCubiertoPorOtroMedio - el cargo original si necesita quedar con metodoPago
+            // exacto 'Saldo a Favor' (para que genEdoCuenta descuente el credito ya usado),
+            // pero este registro debe contar como el dinero real que se esta reconociendo hoy.
+            metodoPago: metodo === 'Saldo a Favor' ? 'Saldo a Favor (reaplicado)' : metodo,
             cancelado: false,
             nota: 'Liquidacion de saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
             createdAt: new Date().toISOString()
@@ -2297,7 +2343,12 @@ function App() {
             folio: 'MORA-' + (cargo.folio || cargo.id).toString().slice(-8),
             tipoMov: 'abono',
             estatus: 'pagado',
-            metodoPago: metodo,
+            // Si el origen es 'Saldo a Favor' exacto, se reetiqueta aqui (solo en este
+            // registro de seguimiento) para que NO quede excluido del recaudado del mes via
+            // esCubiertoPorOtroMedio - el cargo original si necesita quedar con metodoPago
+            // exacto 'Saldo a Favor' (para que genEdoCuenta descuente el credito ya usado),
+            // pero este registro debe contar como el dinero real que se esta reconociendo hoy.
+            metodoPago: metodo === 'Saldo a Favor' ? 'Saldo a Favor (reaplicado)' : metodo,
             cancelado: false,
             nota: 'Abono adicional sobre saldo de ' + (cargo.concepto || 'cargo') + ' de ' + String(cargo.fecha || '').slice(0, 7),
             createdAt: new Date().toISOString()
@@ -4434,7 +4485,10 @@ function App() {
     pagos: pagos,
     esAdmin: esAdmin,
     db: dbRef.current,
-    showToast: showToast
+    showToast: showToast,
+    calcSaldoFavor: calcSaldoFavor,
+    aplicarAbonoSobrePendientes: aplicarAbonoSobrePendientes,
+    setSyncingGlobal: setSyncing
   }), tab === 'gastos' && /*#__PURE__*/React.createElement("div", {
     className: "space-y-5"
   }, /*#__PURE__*/React.createElement("div", {
