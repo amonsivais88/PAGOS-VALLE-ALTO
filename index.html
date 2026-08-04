@@ -2010,6 +2010,8 @@ function App() {
   const [mReg, setMReg] = useState(false);
   const [mEdo, setMEdo] = useState(false);
   const [mImport, setMImport] = useState(false);
+  const [mNoConciliados, setMNoConciliados] = useState(false);
+  const [abonosNoConciliados, setAbonosNoConciliados] = useState([]);
   const [mImportG, setMImportG] = useState(false);
   const [mConfig, setMConfig] = useState(false);
   const [mReclass, setMReclass] = useState(false);
@@ -2220,6 +2222,56 @@ function App() {
   // (prioridad Mantenimiento > Servicios > otros). Si no hay cargos pendientes que apliquen,
   // o si sobra dinero despues de liquidarlos, ese remanente se guarda como Saldo a Favor
   // AQUI ADENTRO (unico lugar donde se crea un registro a_favor), para evitar duplicados.
+  // Version RESTRINGIDA de aplicacion de abonos, usada UNICAMENTE por la plantilla de
+  // Abonos (importarPagos). A diferencia de aplicarAbonoSobrePendientes (que usa Registrar
+  // Pago y SI barre automaticamente meses/conceptos viejos), esta funcion solo busca un cargo
+  // pendiente/parcial del MISMO concepto Y MISMO mes que trae la fila del Excel. Si no
+  // encuentra nada que coincida, no crea ni modifica ningun documento - regresa
+  // sinCoincidencia:true para que la fila se reporte en la ventana de "no conciliados" en vez
+  // de perderse silenciosamente o duplicarse.
+  const aplicarAbonoMismoMes = async (uid, montoAbono, batch, db, fechaAbono, concepto) => {
+    const mesAbono = String(fechaAbono || '').slice(0, 7);
+    const snap = await db.collection('pagos').where('unidadId', '==', uid).where('estatus', 'in', ['pendiente', 'parcial']).where('tipoMov', '==', 'cargo').where('cancelado', '==', false).get();
+    const candidatos = snap.docs.map(d => ({id: d.id, ...d.data()}))
+      .filter(c => c.concepto === concepto && String(c.fecha || '').slice(0, 7) === mesAbono)
+      .sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
+    if (candidatos.length === 0) {
+      return { liquidados: 0, sinCoincidencia: true };
+    }
+    var restante = montoAbono;
+    var liquidados = 0;
+    for (var i = 0; i < candidatos.length && restante > 0; i++) {
+      const cargo = candidatos[i];
+      const saldoPend = Number(cargo.saldoPendiente || cargo.monto);
+      if (restante >= saldoPend) {
+        batch.update(db.collection('pagos').doc(cargo.id), {
+          estatus: 'pagado', fechaPago: fechaAbono, metodoPago: 'Transferencia',
+          montoPagado: Number(cargo.monto), saldoPendiente: 0,
+          updatedAt: new Date().toISOString(), nota: 'Conciliado por plantilla de abonos'
+        });
+        restante -= saldoPend;
+        liquidados++;
+      } else {
+        const prevPagado = Number(cargo.montoPagado || 0);
+        batch.update(db.collection('pagos').doc(cargo.id), {
+          estatus: 'parcial', fechaPago: fechaAbono, metodoPago: 'Transferencia',
+          montoPagado: prevPagado + restante, saldoPendiente: saldoPend - restante,
+          updatedAt: new Date().toISOString(), nota: 'Conciliado parcialmente por plantilla de abonos'
+        });
+        restante = 0;
+      }
+    }
+    if (restante > 0.01) {
+      batch.set(db.collection('pagos').doc(), {
+        unidadId: uid, concepto: 'Saldo a Favor', monto: restante, fecha: fechaAbono,
+        folio: 'A FAVOR', tipoMov: 'abono', estatus: 'a_favor', cancelado: false,
+        conceptoOrigen: concepto,
+        nota: 'Remanente de conciliacion por plantilla de abonos (' + concepto + ')',
+        createdAt: new Date().toISOString()
+      });
+    }
+    return { liquidados, sinCoincidencia: false };
+  };
   const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago, concepto) => {
     // Se buscan cargos 'pendiente' Y 'parcial' (antes solo 'pendiente'). Sin 'parcial', un
     // cargo que ya tenia un abono previo (ej. mes anterior con pago a medias) quedaba invisible
@@ -2637,19 +2689,32 @@ function App() {
       }
       await b.commit();
       var totalLiqImp = 0;
+      var noConciliados = [];
       if (abonosImportados.length > 0) {
         for (var ai2 = 0; ai2 < abonosImportados.length; ai2++) {
           const ab = abonosImportados[ai2];
           const b2i = dbRef.current.batch();
-          const liq = await aplicarAbonoSobrePendientes(ab.unidadId, ab.monto, b2i, dbRef.current, ab.fecha, undefined, ab.concepto);
-          totalLiqImp += liq;
-          await b2i.commit();
+          const res = await aplicarAbonoMismoMes(ab.unidadId, ab.monto, b2i, dbRef.current, ab.fecha, ab.concepto);
+          if (res.sinCoincidencia) {
+            noConciliados.push({
+              unidadId: ab.unidadId, monto: ab.monto, concepto: ab.concepto, fecha: ab.fecha,
+              motivo: 'Sin cargo pendiente que coincida en concepto y mes (podria ya estar pagado, o no existir ese cargo)'
+            });
+          } else {
+            await b2i.commit();
+            totalLiqImp += res.liquidados;
+          }
         }
       }
       var msgImp = total + ' registros importados';
-      if (totalLiqImp > 0) msgImp += ', ' + totalLiqImp + ' cargos liquidados automaticamente';
+      if (totalLiqImp > 0) msgImp += ', ' + totalLiqImp + ' cargos conciliados';
+      if (noConciliados.length > 0) msgImp += ', ' + noConciliados.length + ' sin conciliar';
       showToast(msgImp, 'ok');
       setMImport(false);
+      if (noConciliados.length > 0) {
+        setAbonosNoConciliados(noConciliados);
+        setMNoConciliados(true);
+      }
     } catch (e) {
       showToast('Error: ' + e.message, 'err');
       setSyncing(false);
@@ -3012,6 +3077,17 @@ function App() {
           if (p.estatus === 'parcial') {
             montoDisplay = fmt(p.saldoPendiente || 0) + ' (abono: ' + fmt(p.montoPagado || 0) + ')';
             estatusDisplay = 'PARCIAL';
+          } else if (p.concepto === 'Pagos en Mora' && p.estatus === 'pagado') {
+            // Linea de seguimiento que registra a que meses viejos se aplico este dinero
+            estatusDisplay = 'PAGO EN MORA';
+          } else if (p.tipoMov === 'cargo' && p.estatus === 'pagado' && p.nota && p.nota.indexOf('Pagos en Mora') !== -1) {
+            // El propio cargo (de un mes anterior) se resolvio via un pago registrado despues
+            estatusDisplay = 'PAGADO (CON PAGO EN MORA)';
+          } else if (p.tipoMov === 'cargo' && p.estatus === 'pagado' && (p.metodoPago === 'Saldo a Favor' || p.metodoPago === 'Saldo a Favor (reaplicado)')) {
+            // Se cubrio usando credito ya existente, no dinero nuevo de este mes
+            estatusDisplay = 'PAGADO (DE SALDO A FAVOR)';
+          } else if (p.estatus === 'a_favor') {
+            estatusDisplay = 'A FAVOR';
           }
           return [p.fecha || '', p.concepto || '', p.folio || 'NA', montoDisplay, estatusDisplay];
         }) : [[' ', 'Sin movimientos en el periodo', ' ', ' ', ' ']],
@@ -4298,9 +4374,10 @@ function App() {
     const hoy = new Date();
     const fvEfectiva = fechaVencimientoEfectiva(p);
     const venc = p.estatus === 'pendiente' && fvEfectiva && new Date(fvEfectiva + 'T23:59:59') < hoy;
-    const bg = p.estatus === 'pagado' ? '#D1FAE5' : p.estatus === 'a_favor' ? '#DBEAFE' : p.estatus === 'liquidado' ? '#EDE9FE' : p.estatus === 'parcial' ? '#FEF3C7' : venc ? '#FEE2E2' : '#FEF3C7';
-    const clr = p.estatus === 'pagado' ? '#1B7F5A' : p.estatus === 'a_favor' ? '#1D4ED8' : p.estatus === 'liquidado' ? '#6D28D9' : p.estatus === 'parcial' ? '#B45309' : venc ? '#A6273A' : '#B45309';
-    const lbl = p.estatus === 'pagado' ? 'PAGADO' : p.estatus === 'a_favor' ? 'A FAVOR' : p.estatus === 'liquidado' ? 'LIQUIDADO' : p.estatus === 'parcial' ? 'PARCIAL' : venc ? 'VENCIDO' : 'PENDIENTE';
+    const esPagoMora = p.concepto === 'Pagos en Mora' && p.estatus === 'pagado';
+    const bg = esPagoMora ? '#F3E8FF' : p.estatus === 'pagado' ? '#D1FAE5' : p.estatus === 'a_favor' ? '#DBEAFE' : p.estatus === 'liquidado' ? '#EDE9FE' : p.estatus === 'parcial' ? '#FEF3C7' : venc ? '#FEE2E2' : '#FEF3C7';
+    const clr = esPagoMora ? '#9333EA' : p.estatus === 'pagado' ? '#1B7F5A' : p.estatus === 'a_favor' ? '#1D4ED8' : p.estatus === 'liquidado' ? '#6D28D9' : p.estatus === 'parcial' ? '#B45309' : venc ? '#A6273A' : '#B45309';
+    const lbl = esPagoMora ? 'PAGO EN MORA' : p.estatus === 'pagado' ? 'PAGADO' : p.estatus === 'a_favor' ? 'A FAVOR' : p.estatus === 'liquidado' ? 'LIQUIDADO' : p.estatus === 'parcial' ? 'PARCIAL' : venc ? 'VENCIDO' : 'PENDIENTE';
     return /*#__PURE__*/React.createElement("div", {
       className: "flex flex-col items-center gap-0.5"
     }, /*#__PURE__*/React.createElement("span", {
@@ -4828,7 +4905,31 @@ function App() {
     onImport: importarPagos,
     syncing: syncing,
     tipo: "pagos"
-  }), mImportG && /*#__PURE__*/React.createElement(ModalImport, {
+  }), mNoConciliados && /*#__PURE__*/React.createElement(Modal, {
+    title: "Abonos sin conciliar",
+    onClose: () => setMNoConciliados(false),
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-gray-600"
+  }, "Estos abonos de la plantilla no encontraron un cargo pendiente del mismo concepto y mes para conciliar. No se creo ningun registro para ellos - revisalos y, si aplica, captura el cargo correspondiente o registra el abono manualmente."), /*#__PURE__*/React.createElement("div", {
+    className: "border border-gray-200 rounded-lg overflow-hidden max-h-80 overflow-y-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: { background: C.bg }
+  }, /*#__PURE__*/React.createElement("tr", null, ['Local', 'Concepto', 'Monto', 'Fecha', 'Motivo'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "px-3 py-2 text-left font-semibold text-gray-600"
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, abonosNoConciliados.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i,
+    className: "border-t border-gray-100"
+  }, /*#__PURE__*/React.createElement("td", { className: "px-3 py-2 font-semibold" }, r.unidadId), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, r.concepto), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, fmt(r.monto)), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, r.fecha), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2 text-gray-500" }, r.motivo)))))), /*#__PURE__*/React.createElement("button", {
+    onClick: () => setMNoConciliados(false),
+    className: "w-full py-2 rounded-lg text-white text-sm font-medium",
+    style: { backgroundColor: C.navy }
+  }, "Entendido"))), mImportG && /*#__PURE__*/React.createElement(ModalImport, {
     onClose: () => setMImportG(false),
     onImport: importarGastos,
     syncing: syncing,
