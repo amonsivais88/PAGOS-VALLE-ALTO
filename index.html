@@ -1209,7 +1209,7 @@ function ModalReportePresent({
 function TabSaldos({
   unidades,
   pagos,
-  esAdmin,
+  esAdminCompleto,
   db,
   showToast,
   aplicarAbonoSobrePendientes
@@ -1420,7 +1420,7 @@ function TabSaldos({
     value: busq,
     onChange: e => setBusq(e.target.value),
     className: "pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none w-40"
-  })), esAdmin && /*#__PURE__*/React.createElement("button", {
+  })), esAdminCompleto && /*#__PURE__*/React.createElement("button", {
     onClick: () => setAjusteLocal('nuevo'),
     className: "flex items-center gap-1.5 px-3 py-2 rounded-lg text-white text-sm font-medium",
     style: {
@@ -1439,7 +1439,7 @@ function TabSaldos({
     }
   }, "RELACION DE SALDOS (", filtrado.length, " locales)"), /*#__PURE__*/React.createElement("span", {
     className: "text-xs text-gray-400"
-  }, "Solo lectura", esAdmin ? ' - Admin puede ajustar' : '')), /*#__PURE__*/React.createElement("div", {
+  }, "Solo lectura", esAdminCompleto ? ' - Admin puede ajustar' : '')), /*#__PURE__*/React.createElement("div", {
     className: "overflow-x-auto"
   }, /*#__PURE__*/React.createElement("table", {
     className: "w-full text-sm"
@@ -1501,7 +1501,7 @@ function TabSaldos({
       }
     }, ce.label), /*#__PURE__*/React.createElement("td", {
       className: "px-4 py-3 text-center"
-    }, esAdmin && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("button", {
+    }, esAdminCompleto && r.estado === 'a_favor' && /*#__PURE__*/React.createElement("button", {
       onClick: () => {
         var aj = pagos.filter(function(p){return !p.cancelado && p.unidadId===r.id && p.estatus==='a_favor';});
         if(aj.length>0) eliminarAjuste(aj[aj.length-1].id);
@@ -1988,11 +1988,14 @@ function App() {
   const [pagos, setPagos] = useState([]);
   const [gastos, setGastos] = useState([]);
   const [adminHash, setAdminHash] = useState(null);
+  const [adminHashLimitado, setAdminHashLimitado] = useState(null);
   const [fbReady, setFbReady] = useState(false);
   const [fbError, setFbError] = useState(null);
   const [online, setOnline] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [esAdmin, setEsAdmin] = useState(false);
+  const [adminNivel, setAdminNivel] = useState(null); // null | 'limitado' | 'completo'
+  const esAdmin = adminNivel === 'limitado' || adminNivel === 'completo';
+  const esAdminCompleto = adminNivel === 'completo';
   const [toast, setToast] = useState({
     msg: '',
     type: 'ok'
@@ -2093,13 +2096,25 @@ function App() {
         unsubRef.current = unsub;
         unsubGRef.current = unsubG;
         const cfg = await db.collection('config').doc('admin').get();
-        if (cfg.exists) setAdminHash(cfg.data().passwordHash);else {
+        if (cfg.exists) {
+          setAdminHash(cfg.data().passwordHash);
+          if (cfg.data().passwordHashLimitado) {
+            setAdminHashLimitado(cfg.data().passwordHashLimitado);
+          } else {
+            const hLim = await hashPwd('7821');
+            await db.collection('config').doc('admin').update({ passwordHashLimitado: hLim });
+            setAdminHashLimitado(hLim);
+          }
+        } else {
           const h = await hashPwd('4321');
+          const hLim = await hashPwd('7821');
           await db.collection('config').doc('admin').set({
             passwordHash: h,
+            passwordHashLimitado: hLim,
             lastChanged: new Date().toISOString()
           });
           setAdminHash(h);
+          setAdminHashLimitado(hLim);
         }
         // Cargar pendientes de conciliacion guardados
         try {
@@ -2165,7 +2180,7 @@ function App() {
 
   /* ACCIONES */
   const generarCargosMes = async (mes, ano) => {
-    if (!dbRef.current || !esAdmin) return;
+    if (!dbRef.current || !esAdminCompleto) return;
     if (syncing) return;
     setSyncing(true);
     const mesStr = String(mes).padStart(2, '0');
@@ -2752,7 +2767,7 @@ function App() {
     }
   };
   const cancelar = async id => {
-    if (!esAdmin || !confirm(' Cancelar?')) return;
+    if (!esAdminCompleto || !confirm(' Cancelar?')) return;
     setSyncing(true);
     try {
       await dbRef.current.collection('pagos').doc(id).update({
@@ -2767,7 +2782,7 @@ function App() {
     }
   };
   const restaurar = async id => {
-    if (!esAdmin) return;
+    if (!esAdminCompleto) return;
     setSyncing(true);
     try {
       await dbRef.current.collection('pagos').doc(id).update({
@@ -2801,7 +2816,7 @@ function App() {
   // trata en todos los calculos como si nunca hubiera existido, salvo por quedar visible
   // en el historial para trazabilidad).
   const liquidarCargo = async id => {
-    if (!esAdmin) return;
+    if (!esAdminCompleto) return;
     const p = pagos.find(x => x.id === id);
     if (!p || p.tipoMov !== 'cargo' || (p.estatus !== 'pendiente' && p.estatus !== 'parcial')) return;
     const motivo = window.prompt('Motivo de la liquidacion (opcional):', '');
@@ -2866,7 +2881,7 @@ function App() {
     }
   };
   const eliminarGasto = async id => {
-    if (!esAdmin || !confirm(' Eliminar?')) return;
+    if (!esAdminCompleto || !confirm(' Eliminar?')) return;
     try {
       await dbRef.current.collection('gastos').doc(id).delete();
       showToast('Eliminado', 'ok');
@@ -2882,21 +2897,25 @@ function App() {
     }
     const h = await hashPwd(pwd);
     if (h === adminHash) {
-      setEsAdmin(true);
+      setAdminNivel('completo');
       setMAuth(false);
-      showToast('Admin activado', 'ok');
+      showToast('Admin completo activado', 'ok');
+    } else if (h === adminHashLimitado) {
+      setAdminNivel('limitado');
+      setMAuth(false);
+      showToast('Admin limitado activado', 'ok');
     } else setAuthErr('Contrase a incorrecta');
   };
-  const cambiarPwd = async nueva => {
+  const cambiarPwd = async (nueva, cual) => {
     if (!nueva || nueva.length < 4) return alert('M nimo 4 chars');
     const h = await hashPwd(nueva);
-    await dbRef.current.collection('config').doc('admin').set({
-      passwordHash: h,
+    const campo = cual === 'limitado' ? 'passwordHashLimitado' : 'passwordHash';
+    await dbRef.current.collection('config').doc('admin').update({
+      [campo]: h,
       lastChanged: new Date().toISOString()
     });
-    setAdminHash(h);
-    showToast('Contrase a actualizada', 'ok');
-    setMConfig(false);
+    if (cual === 'limitado') setAdminHashLimitado(h);else setAdminHash(h);
+    showToast('Contrase a ' + (cual === 'limitado' ? 'limitada' : 'completa') + ' actualizada', 'ok');
   };
 
   /* PDF UTILS */
@@ -3919,7 +3938,7 @@ function App() {
     st: {
       color: '#FCA5A5'
     }
-  }), "Offline")), esAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+  }), "Offline")), esAdminCompleto && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
     onClick: () => setMReporte(true),
     className: "p-2 rounded-lg hover:scale-105 transition text-white",
     style: {
@@ -3938,13 +3957,13 @@ function App() {
   }, /*#__PURE__*/React.createElement(I.Set, {
     sz: 16
   }))), /*#__PURE__*/React.createElement("button", {
-    onClick: () => esAdmin ? setEsAdmin(false) : setMAuth(true),
+    onClick: () => esAdmin ? setAdminNivel(null) : setMAuth(true),
     className: "p-2 rounded-lg hover:scale-105 transition",
     style: {
-      background: esAdmin ? C.gold : 'rgba(255,255,255,.1)',
+      background: esAdminCompleto ? C.gold : esAdmin ? '#93C5FD' : 'rgba(255,255,255,.1)',
       color: esAdmin ? C.navy : 'white'
     },
-    title: esAdmin ? 'Cerrar sesi n admin' : 'Acceso admin'
+    title: esAdminCompleto ? 'Cerrar sesion (Admin Completo)' : esAdmin ? 'Cerrar sesion (Admin Limitado)' : 'Acceso admin'
   }, esAdmin ? /*#__PURE__*/React.createElement(I.Unlock, {
     sz: 18
   }) : /*#__PURE__*/React.createElement(I.Lock, {
@@ -4224,7 +4243,7 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement(I.Plus, {
     sz: 15
-  }), "Registrar Pago"), esAdmin && /*#__PURE__*/React.createElement("button", {
+  }), "Registrar Pago"), esAdminCompleto && /*#__PURE__*/React.createElement("button", {
     onClick: () => setMCargos(true),
     className: "flex items-center gap-2 px-4 py-2.5 rounded-lg text-white font-medium text-sm hover:shadow-md transition",
     style: {
@@ -4427,7 +4446,7 @@ function App() {
     st: {
       color: C.navy
     }
-  })), esAdmin && /*#__PURE__*/React.createElement(React.Fragment, null, editId === p.id ? null : /*#__PURE__*/React.createElement("button", {
+  })), esAdmin && (editId === p.id ? null : /*#__PURE__*/React.createElement("button", {
     onClick: () => {
       setEditId(p.id);
       setEditMonto(p.monto);
@@ -4441,7 +4460,7 @@ function App() {
     st: {
       color: '#2563EB'
     }
-  })), p.tipoMov === 'cargo' && (p.estatus === 'pendiente' || p.estatus === 'parcial') && /*#__PURE__*/React.createElement("button", {
+  }))), esAdminCompleto && /*#__PURE__*/React.createElement(React.Fragment, null, p.tipoMov === 'cargo' && (p.estatus === 'pendiente' || p.estatus === 'parcial') && /*#__PURE__*/React.createElement("button", {
     onClick: () => liquidarCargo(p.id),
     className: "p-1.5 rounded hover:bg-purple-50 transition",
     title: "Liquidar (no cuenta como recaudado ni resta saldo a favor)"
@@ -4554,7 +4573,7 @@ function App() {
   }, fmt(top10.reduce((s, m) => s + m.total, 0)))))), tab === 'saldos' && /*#__PURE__*/React.createElement(TabSaldos, {
     unidades: unidades,
     pagos: pagos,
-    esAdmin: esAdmin,
+    esAdminCompleto: esAdminCompleto,
     db: dbRef.current,
     showToast: showToast,
     aplicarAbonoSobrePendientes: aplicarAbonoSobrePendientes
@@ -4725,7 +4744,7 @@ function App() {
     style: {
       background: C.bg
     }
-  }, /*#__PURE__*/React.createElement("tr", null, ['Fecha', 'Concepto', 'Tipo', 'Descripci n', 'Monto', ...(esAdmin ? ['Acc.'] : [''])].filter(Boolean).map(h => /*#__PURE__*/React.createElement("th", {
+  }, /*#__PURE__*/React.createElement("tr", null, ['Fecha', 'Concepto', 'Tipo', 'Descripci n', 'Monto', ...(esAdminCompleto ? ['Acc.'] : [''])].filter(Boolean).map(h => /*#__PURE__*/React.createElement("th", {
     key: h,
     className: `px-4 py-3 font-semibold text-xs uppercase tracking-wider ${h === 'Monto' || h === 'Acc.' ? 'text-center' : 'text-left'}`,
     style: {
@@ -4752,7 +4771,7 @@ function App() {
     style: {
       color: C.err
     }
-  }, fmt(g.monto)), esAdmin && /*#__PURE__*/React.createElement("td", {
+  }, fmt(g.monto)), esAdminCompleto && /*#__PURE__*/React.createElement("td", {
     className: "px-4 py-3 text-center"
   }, /*#__PURE__*/React.createElement("button", {
     onClick: () => eliminarGasto(g.id),
@@ -4968,26 +4987,38 @@ function App() {
     }
   }, "Autenticar"), /*#__PURE__*/React.createElement("p", {
     className: "text-xs text-gray-400 mt-3 text-center"
-  }, "Contrase\xF1a inicial: ", /*#__PURE__*/React.createElement("code", {
-    className: "bg-gray-100 px-1 rounded"
-  }, "4321"))), mConfig && esAdmin && /*#__PURE__*/React.createElement(Modal, {
+  }, "Acepta la contrase\xF1a de admin completo o de admin limitado seg\xFAn el nivel que necesites.")), mConfig && esAdminCompleto && /*#__PURE__*/React.createElement(Modal, {
     title: "Configuraci\xF3n de Administrador",
     onClose: () => setMConfig(false)
   }, /*#__PURE__*/React.createElement("div", {className: "space-y-6"},
   /*#__PURE__*/React.createElement("div", null,
-    /*#__PURE__*/React.createElement("p", {className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3"}, "Cambiar contrase\xF1a"),
+    /*#__PURE__*/React.createElement("p", {className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3"}, "Cambiar contrase\xF1as"),
     /*#__PURE__*/React.createElement(Lbl, {
-      text: "Nueva contrase\xF1a (m\xEDnimo 4 caracteres)"
+      text: "Admin Completo - nueva contrase\xF1a (m\xEDnimo 4 caracteres)"
     }, /*#__PURE__*/React.createElement("input", {
       type: "password",
-      id: "np",
-      placeholder: "Nueva contrase\xF1a",
+      id: "npCompleto",
+      placeholder: "Nueva contrase\xF1a de admin completo",
       className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
-    })), /*#__PURE__*/React.createElement("button", {
-      onClick: () => cambiarPwd(document.getElementById('np').value),
-      className: "w-full mt-3 py-2.5 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
+    })),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: () => cambiarPwd(document.getElementById('npCompleto').value, 'completo'),
+      className: "w-full mt-2 mb-4 py-2 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
       style: {background: C.navy}
-    }, "Actualizar contrase\xF1a")),
+    }, "Actualizar contrase\xF1a completa"),
+    /*#__PURE__*/React.createElement(Lbl, {
+      text: "Admin Limitado - nueva contrase\xF1a (m\xEDnimo 4 caracteres)"
+    }, /*#__PURE__*/React.createElement("input", {
+      type: "password",
+      id: "npLimitado",
+      placeholder: "Nueva contrase\xF1a de admin limitado",
+      className: "w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:outline-none"
+    })),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: () => cambiarPwd(document.getElementById('npLimitado').value, 'limitado'),
+      className: "w-full mt-2 py-2 rounded-lg text-white font-medium text-sm hover:opacity-90 transition",
+      style: {background: '#93C5FD', color: C.navy}
+    }, "Actualizar contrase\xF1a limitada")),
   /*#__PURE__*/React.createElement("hr", {className: "border-gray-200"}),
   /*#__PURE__*/React.createElement("div", null,
     /*#__PURE__*/React.createElement("p", {className: "text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1"}, "Reclasificar pagos como Saldo a Favor"),
