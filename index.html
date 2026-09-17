@@ -2125,34 +2125,39 @@ function App() {
             })));
         } catch (e) {}
         setFbReady(true);
-        // Auto-generar cargos fijos del mes actual si no existen
+        // Auto-generar cargos fijos del mes actual si no existen (usa la misma
+        // funcion nucleo que el boton manual "Generar Cargos del Mes" para que
+        // ambos caminos no puedan divergir). Cualquier resultado -exito, ya
+        // existian, o error- queda registrado en 'auditoria' para poder
+        // verificarlo desde el sistema en vez de depender de la consola del
+        // navegador de quien haya abierto la pagina.
         try {
           const hoyAuto = new Date();
           const mesAuto = hoyAuto.getMonth() + 1;
           const anoAuto = hoyAuto.getFullYear();
-          const mesStrAuto = String(mesAuto).padStart(2,'0');
-          const fechaAutoCheck = anoAuto + '-' + mesStrAuto + '-01';
-          const snapAuto = await db.collection('pagos').where('concepto','==','Cuota de Mantenimiento').where('tipoMov','==','cargo').where('fecha','==',fechaAutoCheck).get();
-          if (snapAuto.empty) {
-            const undsAuto = generarUnidades();
-            const bAuto = db.batch();
-            const folioAuto = 'MNT-' + anoAuto + mesStrAuto;
-            const ultimoDiaAuto = new Date(anoAuto, mesAuto, 0).getDate();
-            const fechaVencAuto = anoAuto + '-' + mesStrAuto + '-' + String(ultimoDiaAuto).padStart(2,'0');
-            undsAuto.forEach((u, idx) => {
-              bAuto.set(db.collection('pagos').doc(), {
-                unidadId: u.id, concepto: 'Cuota de Mantenimiento',
-                monto: getCuotaFija(u.id), fecha: fechaAutoCheck,
-                fechaVencimiento: fechaVencAuto, tipoMov: 'cargo',
-                estatus: 'pendiente', cancelado: false,
-                createdAt: new Date().toISOString(),
-                folio: folioAuto + '-' + String(idx+1).padStart(3,'0')
-              });
-            });
-            await bAuto.commit();
+          const rAuto = await crearCargosMantenimientoMes(mesAuto, anoAuto);
+          await db.collection('auditoria').add({
+            accion: 'auto_generar_cargos',
+            registroId: null,
+            fecha: new Date().toISOString(),
+            detalles: rAuto.yaExistian
+              ? { mes: mesAuto, ano: anoAuto, resultado: 'ya_existian' }
+              : { mes: mesAuto, ano: anoAuto, resultado: 'generados', count: rAuto.count }
+          });
+          if (!rAuto.yaExistian) {
             console.log('[EVA] Cargos de ' + MESES_L[mesAuto-1] + ' ' + anoAuto + ' generados automaticamente');
           }
-        } catch(eAuto) { console.warn('[EVA] Auto-cargos:', eAuto.message); }
+        } catch(eAuto) {
+          try {
+            await db.collection('auditoria').add({
+              accion: 'auto_generar_cargos',
+              registroId: null,
+              fecha: new Date().toISOString(),
+              detalles: { resultado: 'error', error: eAuto.message }
+            });
+          } catch (e2) {}
+          console.warn('[EVA] Auto-cargos:', eAuto.message);
+        }
       } catch (e) {
         setFbError('No se pudo conectar a Firebase. Revisa firebaseConfig.');
       }
@@ -2179,44 +2184,57 @@ function App() {
   useEffect(() => setGPg(1), [gMes, gAno]);
 
   /* ACCIONES */
-  const generarCargosMes = async (mes, ano) => {
-    if (!dbRef.current || !esAdminCompleto) return;
-    if (syncing) return;
-    setSyncing(true);
+  // Nucleo unico de generacion de cargos de Cuota de Mantenimiento: lo usan
+  // tanto el arranque automatico (al abrir la app) como el boton manual
+  // "Generar Cargos del Mes", para que nunca existan dos implementaciones
+  // que puedan divergir. No depende de esAdminCompleto ni de estado de UI:
+  // solo toca Firestore y regresa el resultado.
+  const crearCargosMantenimientoMes = async (mes, ano) => {
     const mesStr = String(mes).padStart(2, '0');
     const fechaCargo = ano + '-' + mesStr + '-01';
     const snap = await dbRef.current.collection('pagos').where('concepto', '==', 'Cuota de Mantenimiento').where('tipoMov', '==', 'cargo').where('fecha', '==', fechaCargo).get();
     if (!snap.empty) {
-      setSyncing(false);
-      showToast('Ya existen cargos de mantenimiento para este mes', 'err');
-      return false;
+      return { ok: true, yaExistian: true, count: 0 };
     }
-    try {
-      const b = dbRef.current.batch();
-      const folioBase = 'MNT-' + ano + mesStr;
-      unidades.forEach((u, idx) => {
-        const monto = getCuotaFija(u.id);
-        const ultimoDia = new Date(ano, mes, 0).getDate();
-        const fechaVenc = ano + '-' + mesStr + '-' + String(ultimoDia).padStart(2, '0');
-        b.set(dbRef.current.collection('pagos').doc(), {
-          unidadId: u.id,
-          concepto: 'Cuota de Mantenimiento',
-          monto: monto,
-          fecha: fechaCargo,
-          fechaVencimiento: fechaVenc,
-          tipoMov: 'cargo',
-          estatus: 'pendiente',
-          cancelado: false,
-          createdAt: new Date().toISOString(),
-          folio: folioBase + '-' + String(idx + 1).padStart(3, '0')
-        });
+    const unds = generarUnidades();
+    const b = dbRef.current.batch();
+    const folioBase = 'MNT-' + ano + mesStr;
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const fechaVenc = ano + '-' + mesStr + '-' + String(ultimoDia).padStart(2, '0');
+    unds.forEach((u, idx) => {
+      b.set(dbRef.current.collection('pagos').doc(), {
+        unidadId: u.id,
+        concepto: 'Cuota de Mantenimiento',
+        monto: getCuotaFija(u.id),
+        fecha: fechaCargo,
+        fechaVencimiento: fechaVenc,
+        tipoMov: 'cargo',
+        estatus: 'pendiente',
+        cancelado: false,
+        createdAt: new Date().toISOString(),
+        folio: folioBase + '-' + String(idx + 1).padStart(3, '0')
       });
-      await b.commit();
-      showToast('Cargos generados para ' + unidades.length + ' locales', 'ok');
+    });
+    await b.commit();
+    return { ok: true, yaExistian: false, count: unds.length };
+  };
+
+  const generarCargosMes = async (mes, ano) => {
+    if (!dbRef.current || !esAdminCompleto) return;
+    if (syncing) return;
+    setSyncing(true);
+    try {
+      const r = await crearCargosMantenimientoMes(mes, ano);
+      setSyncing(false);
+      if (r.yaExistian) {
+        showToast('Ya existen cargos de mantenimiento para este mes', 'err');
+        return false;
+      }
+      showToast('Cargos generados para ' + r.count + ' locales', 'ok');
       return true;
     } catch (e) {
-      showToast('Error: ' + e.message, 'err');
       setSyncing(false);
+      showToast('Error: ' + e.message, 'err');
       return false;
     }
   };
