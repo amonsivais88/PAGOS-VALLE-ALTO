@@ -2015,6 +2015,13 @@ function App() {
   const [mImport, setMImport] = useState(false);
   const [mNoConciliados, setMNoConciliados] = useState(false);
   const [abonosNoConciliados, setAbonosNoConciliados] = useState([]);
+  // Pregunta "deuda anterior vs mes en curso" al registrar un abono (Registrar Pago).
+  const [mDeudaPrevia, setMDeudaPrevia] = useState(false);
+  const [deudaPreviaInfo, setDeudaPreviaInfo] = useState(null); // {uid, detalles, montoAbono}
+  const [deudaPreviaResume, setDeudaPreviaResume] = useState(null); // (modo) => void
+  const [mConsistencia, setMConsistencia] = useState(false);
+  const [consistenciaResultado, setConsistenciaResultado] = useState(null);
+  const [consistenciaBusy, setConsistenciaBusy] = useState(false);
   const [mImportG, setMImportG] = useState(false);
   const [mConfig, setMConfig] = useState(false);
   const [mReclass, setMReclass] = useState(false);
@@ -2239,6 +2246,53 @@ function App() {
     }
   };
 
+  // Revisa todos los registros activos y detecta inconsistencias: cargos donde pagado+pendiente
+  // no suma el monto (como el bug de F-10), y folios duplicados entre cargos activos del mismo
+  // local. Solo lee datos y arma una lista para revisar a mano - nunca corrige nada solo.
+  const revisarConsistencia = async () => {
+    if (!dbRef.current || !esAdminCompleto) return;
+    setConsistenciaBusy(true);
+    try {
+      const snap = await dbRef.current.collection('pagos').where('cancelado', '==', false).get();
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const problemas = [];
+      const foliosVistos = {};
+      docs.forEach(p => {
+        if (p.tipoMov !== 'cargo') return;
+        if (p.estatus === 'parcial' || p.estatus === 'pagado') {
+          const pagado = Number(p.montoPagado || 0);
+          const pendiente = Number(p.saldoPendiente || 0);
+          const monto = Number(p.monto || 0);
+          if (Math.abs(pagado + pendiente - monto) > 0.5) {
+            problemas.push({
+              tipo: 'Saldo no cuadra', local: p.unidadId, folio: p.folio || '(sin folio)',
+              concepto: p.concepto,
+              detalle: 'Monto ' + fmt(monto) + ' pero pagado ' + fmt(pagado) + ' + pendiente ' + fmt(pendiente) + ' = ' + fmt(pagado + pendiente)
+            });
+          }
+        }
+        if (p.folio) {
+          const key = p.unidadId + '|' + p.folio;
+          foliosVistos[key] = (foliosVistos[key] || 0) + 1;
+        }
+      });
+      Object.keys(foliosVistos).forEach(key => {
+        if (foliosVistos[key] > 1) {
+          const [uid, folio] = key.split('|');
+          problemas.push({
+            tipo: 'Folio duplicado', local: uid, folio, concepto: '',
+            detalle: foliosVistos[key] + ' cargos activos con el mismo folio - revisa si es doble captura'
+          });
+        }
+      });
+      setConsistenciaResultado(problemas);
+    } catch (e) {
+      showToast('Error: ' + e.message, 'err');
+      setConsistenciaResultado([]);
+    } finally {
+      setConsistenciaBusy(false);
+    }
+  };
   const prioridadConcepto = concepto => {
     if (!concepto) return 3;
     const c = String(concepto).toLowerCase();
@@ -2305,7 +2359,23 @@ function App() {
     }
     return { liquidados, sinCoincidencia: false };
   };
-  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago, concepto) => {
+  // Busca si un local tiene deuda de MESES DISTINTOS al de referencia (fechaRef), para poder
+  // preguntarle al usuario, antes de aplicar un abono, si quiere que ese abono absorba esa
+  // deuda vieja o se quede completo en el mes en curso. Solo cargos activos (no cancelados).
+  const buscarDeudaAnterior = async (uid, fechaRef) => {
+    if (!dbRef.current || !uid) return [];
+    const mesRef = String(fechaRef || new Date().toISOString().split('T')[0]).slice(0, 7);
+    const snap = await dbRef.current.collection('pagos')
+      .where('unidadId', '==', uid)
+      .where('estatus', 'in', ['pendiente', 'parcial'])
+      .where('tipoMov', '==', 'cargo')
+      .where('cancelado', '==', false).get();
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter(c => String(c.fecha || '').slice(0, 7) !== mesRef)
+      .map(c => ({ concepto: c.concepto, mes: String(c.fecha || '').slice(0, 7), saldo: Number(c.saldoPendiente || c.monto) }))
+      .sort((a, b) => a.mes.localeCompare(b.mes));
+  };
+  const aplicarAbonoSobrePendientes = async (uid, montoAbono, batch, db, fechaPago, metodoPago, concepto, soloMesActual) => {
     // Se buscan cargos 'pendiente' Y 'parcial' (antes solo 'pendiente'). Sin 'parcial', un
     // cargo que ya tenia un abono previo (ej. mes anterior con pago a medias) quedaba invisible
     // para abonos posteriores: el dinero nuevo se iba a Saldo a Favor en vez de terminar de
@@ -2405,6 +2475,12 @@ function App() {
       candidatos1 = candidatos1.filter(c => esVencido(c, hoy));
     } else if (concepto) {
       candidatos1 = candidatos1.filter(c => c.concepto === concepto);
+      // soloMesActual=true: el usuario eligio "aplicar completo al mes en curso" cuando se le
+      // pregunto por la deuda vieja - se restringe a cargos del mismo mes que el abono, sin
+      // tocar deuda de otros meses (esa se queda pendiente tal cual, a proposito).
+      if (soloMesActual) {
+        candidatos1 = candidatos1.filter(c => String(c.fecha || '').slice(0, 7) === String(hoy).slice(0, 7));
+      }
     }
     candidatos1 = candidatos1.sort((a, b) => {
       if (concepto) return String(a.fecha || '').localeCompare(String(b.fecha || ''));
@@ -2422,7 +2498,7 @@ function App() {
     // cualquier abono, sin necesidad de un boton aparte, y sin reintroducir el bug de mezclar
     // conceptos en cargos que AUN no estan vencidos (esVencido exige que ya haya pasado su
     // fecha de vencimiento, nunca toca cargos recientes de otro concepto).
-    if (montoRestante > 0.01 && concepto && concepto !== 'Pagos en Mora') {
+    if (montoRestante > 0.01 && concepto && concepto !== 'Pagos en Mora' && !soloMesActual) {
       const candidatos2 = cargosTodos.filter(c => !procesadosIds.has(c.id) && esVencido(c, hoy))
         .sort((a, b) => String(a.fecha || '').localeCompare(String(b.fecha || '')));
       procesarLista(candidatos2, true);
@@ -2588,8 +2664,25 @@ function App() {
       return 0;
     }
   };
-  const guardarPagos = async rs => {
+  const guardarPagos = async (rs, modoDeuda) => {
     if (!dbRef.current) return;
+    // Antes de guardar nada: si hay un abono y ese local tiene deuda de OTRO mes, y todavia
+    // no se eligio que hacer con ella, se pausa por completo (nada se escribe en Firestore
+    // todavia) y se le pregunta al usuario. Cuando responda, esta misma funcion se vuelve a
+    // llamar con modoDeuda ya definido y sigue de largo sin volver a preguntar.
+    if (!modoDeuda) {
+      for (const r of rs) {
+        if (r.tipoMov === 'abono' && r.unidadId) {
+          const deuda = await buscarDeudaAnterior(r.unidadId, r.fechaPago || r.fecha);
+          if (deuda.length > 0) {
+            setDeudaPreviaInfo({ uid: r.unidadId, detalles: deuda, montoAbono: r.monto });
+            setDeudaPreviaResume(() => (modo) => guardarPagos(rs, modo));
+            setMDeudaPrevia(true);
+            return;
+          }
+        }
+      }
+    }
     setSyncing(true);
     try {
       const b = dbRef.current.batch();
@@ -2624,7 +2717,8 @@ function App() {
           const b2 = dbRef.current.batch();
           const liq = await aplicarAbonoSobrePendientes(
             abono.unidadId, abono.monto, b2, dbRef.current,
-            abono.fechaPago || abono.fecha, abono.metodoPago, abono.concepto
+            abono.fechaPago || abono.fecha, abono.metodoPago, abono.concepto,
+            modoDeuda === 'actual'
           );
           totalLiq += liq;
           await b2.commit();
@@ -2857,14 +2951,40 @@ function App() {
   };
   const guardarEdicion = async id => {
     if (!esAdmin || !editMonto || !editFecha || !editConcepto) return;
+    const nuevoMonto = Number(editMonto);
+    const actual = pagos.find(p => p.id === id);
+    const updData = {
+      monto: nuevoMonto,
+      fecha: editFecha,
+      concepto: editConcepto,
+      updatedAt: new Date().toISOString()
+    };
+    // Si el registro es un cargo que ya tiene historial de pago (parcial o pagado), el monto
+    // NO se puede cambiar sin recalcular el saldo pendiente - antes se dejaba el saldo viejo
+    // sin tocar, lo que producia numeros fantasma (pagado+pendiente dejaba de sumar el monto).
+    if (actual && actual.tipoMov === 'cargo' && (actual.estatus === 'parcial' || actual.estatus === 'pagado')) {
+      const montoPagadoActual = Number(actual.montoPagado || 0);
+      if (montoPagadoActual > nuevoMonto + 0.01) {
+        showToast('No se puede bajar el monto a ' + fmt(nuevoMonto) + ': ya hay ' + fmt(montoPagadoActual) + ' pagados en este registro. Corrige montoPagado primero en Firestore o consulta antes de continuar.', 'err');
+        return;
+      }
+      const nuevoSaldo = Math.max(0, nuevoMonto - montoPagadoActual);
+      updData.saldoPendiente = nuevoSaldo;
+      updData.estatus = nuevoSaldo <= 0.01 ? 'pagado' : 'parcial';
+    }
+    // Candado de seguridad: si de alguna forma los numeros no cuadran (pagado+pendiente debe
+    // sumar exactamente el monto), no se guarda - mejor un error visible que un dato corrupto
+    // silencioso como el que tuvimos que corregir a mano.
+    if (updData.saldoPendiente !== undefined) {
+      const montoPagadoActual = Number((actual && actual.montoPagado) || 0);
+      if (Math.abs(montoPagadoActual + updData.saldoPendiente - nuevoMonto) > 0.5) {
+        showToast('No se guardo: los numeros no cuadran (pagado + pendiente debe sumar el monto). Revisa el registro.', 'err');
+        return;
+      }
+    }
     setSyncing(true);
     try {
-      await dbRef.current.collection('pagos').doc(id).update({
-        monto: Number(editMonto),
-        fecha: editFecha,
-        concepto: editConcepto,
-        updatedAt: new Date().toISOString()
-      });
+      await dbRef.current.collection('pagos').doc(id).update(updData);
       setEditId(null);
       showToast('Registro actualizado', 'ok');
     } catch (e) {
@@ -3966,6 +4086,15 @@ function App() {
   }, /*#__PURE__*/React.createElement(I.Report, {
     sz: 16
   })), /*#__PURE__*/React.createElement("button", {
+    onClick: () => { setMConsistencia(true); revisarConsistencia(); },
+    className: "p-2 rounded-lg hover:scale-105 transition text-white",
+    style: {
+      background: 'rgba(255,255,255,.1)'
+    },
+    title: "Revisar consistencia"
+  }, /*#__PURE__*/React.createElement(I.Check, {
+    sz: 16
+  })), /*#__PURE__*/React.createElement("button", {
     onClick: () => setMConfig(true),
     className: "p-2 rounded-lg hover:scale-105 transition text-white",
     style: {
@@ -4966,7 +5095,60 @@ function App() {
     onClick: () => setMNoConciliados(false),
     className: "w-full py-2 rounded-lg text-white text-sm font-medium",
     style: { backgroundColor: C.navy }
-  }, "Entendido"))), mImportG && /*#__PURE__*/React.createElement(ModalImport, {
+  }, "Entendido"))), mDeudaPrevia && deudaPreviaInfo && /*#__PURE__*/React.createElement(Modal, {
+    title: "Este local tiene deuda de otro mes",
+    onClose: () => { setMDeudaPrevia(false); setDeudaPreviaInfo(null); setDeudaPreviaResume(null); setSyncing(false); }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-gray-600"
+  }, "El local ", /*#__PURE__*/React.createElement("strong", null, deudaPreviaInfo.uid), " debe de meses anteriores:"), /*#__PURE__*/React.createElement("div", {
+    className: "border border-gray-200 rounded-lg overflow-hidden"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: { background: C.bg }
+  }, /*#__PURE__*/React.createElement("tr", null, ['Mes', 'Concepto', 'Saldo'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "px-3 py-2 text-left font-semibold text-gray-600"
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, deudaPreviaInfo.detalles.map((d, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i,
+    className: "border-t border-gray-100"
+  }, /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, d.mes), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, d.concepto), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2 font-semibold" }, fmt(d.saldo))))))), /*#__PURE__*/React.createElement("p", {
+    className: "text-sm text-gray-600"
+  }, "\xBFQu\xE9 quieres hacer con este abono de ", /*#__PURE__*/React.createElement("strong", null, fmt(deudaPreviaInfo.montoAbono)), "?"), /*#__PURE__*/React.createElement("button", {
+    onClick: () => { const r = deudaPreviaResume; setMDeudaPrevia(false); setDeudaPreviaInfo(null); setDeudaPreviaResume(null); if (r) r('barrer'); },
+    className: "w-full py-2.5 rounded-lg text-white text-sm font-medium text-left px-4",
+    style: { backgroundColor: C.navy }
+  }, /*#__PURE__*/React.createElement("div", { className: "font-semibold" }, "Absorber la deuda anterior primero"), /*#__PURE__*/React.createElement("div", { className: "text-xs opacity-80 font-normal" }, "Se cubre primero lo viejo (queda como Pago en Mora); lo que sobre se aplica al mes en curso.")), /*#__PURE__*/React.createElement("button", {
+    onClick: () => { const r = deudaPreviaResume; setMDeudaPrevia(false); setDeudaPreviaInfo(null); setDeudaPreviaResume(null); if (r) r('actual'); },
+    className: "w-full py-2.5 rounded-lg text-sm font-medium text-left px-4 border border-gray-300"
+  }, /*#__PURE__*/React.createElement("div", { className: "font-semibold" }, "Aplicar completo al mes en curso"), /*#__PURE__*/React.createElement("div", { className: "text-xs text-gray-500 font-normal" }, "La deuda anterior se queda pendiente tal cual, sin tocarla.")))), mConsistencia && /*#__PURE__*/React.createElement(Modal, {
+    title: "Revisar consistencia",
+    onClose: () => setMConsistencia(false),
+    wide: true
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "space-y-3"
+  }, consistenciaBusy ? /*#__PURE__*/React.createElement("div", { className: "flex items-center gap-2 text-sm text-gray-500 py-6 justify-center" }, /*#__PURE__*/React.createElement(I.Spin, { sz: 16 }), "Revisando registros...") :
+  !consistenciaResultado || consistenciaResultado.length === 0 ? /*#__PURE__*/React.createElement("div", { className: "text-sm text-gray-600 py-6 text-center" }, "Sin problemas encontrados. Todos los cargos activos cuadran.") :
+  /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("p", { className: "text-sm text-gray-600" }, consistenciaResultado.length + ' posible(s) problema(s) encontrado(s). Esto solo detecta - nada se corrige automaticamente.'), /*#__PURE__*/React.createElement("div", {
+    className: "border border-gray-200 rounded-lg overflow-hidden max-h-96 overflow-y-auto"
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "w-full text-xs"
+  }, /*#__PURE__*/React.createElement("thead", {
+    style: { background: C.bg }
+  }, /*#__PURE__*/React.createElement("tr", null, ['Tipo', 'Local', 'Folio', 'Concepto', 'Detalle'].map(h => /*#__PURE__*/React.createElement("th", {
+    key: h,
+    className: "px-3 py-2 text-left font-semibold text-gray-600"
+  }, h)))), /*#__PURE__*/React.createElement("tbody", null, consistenciaResultado.map((r, i) => /*#__PURE__*/React.createElement("tr", {
+    key: i,
+    className: "border-t border-gray-100"
+  }, /*#__PURE__*/React.createElement("td", { className: "px-3 py-2 font-semibold text-red-600" }, r.tipo), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, r.local), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, r.folio), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2" }, r.concepto), /*#__PURE__*/React.createElement("td", { className: "px-3 py-2 text-gray-500" }, r.detalle)))))))), /*#__PURE__*/React.createElement("button", {
+    onClick: revisarConsistencia,
+    disabled: consistenciaBusy,
+    className: "w-full py-2 rounded-lg text-white text-sm font-medium disabled:opacity-50",
+    style: { backgroundColor: C.navy }
+  }, "Volver a revisar")), mImportG && /*#__PURE__*/React.createElement(ModalImport, {
     onClose: () => setMImportG(false),
     onImport: importarGastos,
     syncing: syncing,
