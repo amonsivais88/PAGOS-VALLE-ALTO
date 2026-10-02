@@ -2259,29 +2259,47 @@ function App() {
       const foliosVistos = {};
       docs.forEach(p => {
         if (p.tipoMov !== 'cargo') return;
-        if (p.estatus === 'parcial' || p.estatus === 'pagado') {
-          const pagado = Number(p.montoPagado || 0);
-          const pendiente = Number(p.saldoPendiente || 0);
-          const monto = Number(p.monto || 0);
-          if (Math.abs(pagado + pendiente - monto) > 0.5) {
-            problemas.push({
-              tipo: 'Saldo no cuadra', local: p.unidadId, folio: p.folio || '(sin folio)',
-              concepto: p.concepto,
-              detalle: 'Monto ' + fmt(monto) + ' pero pagado ' + fmt(pagado) + ' + pendiente ' + fmt(pendiente) + ' = ' + fmt(pagado + pendiente)
-            });
-          }
+        // No se compara "pagado + pendiente == monto": un cargo liquidado parcialmente con
+        // dinero de OTRO mes (Pagos en Mora) deja "pagado" sin tocar a proposito (ese dinero
+        // se guarda en un abono aparte, para no inflar el mes del cargo) - esa comparacion
+        // exacta da falsos positivos en esos casos, que son correctos. En vez de eso se revisan
+        // 3 cosas que NUNCA son validas bajo ningun escenario, mora o no:
+        const pagado = Number(p.montoPagado || 0);
+        const pendiente = Number(p.saldoPendiente || 0);
+        const monto = Number(p.monto || 0);
+        if (pagado > monto + 0.5) {
+          problemas.push({
+            tipo: 'Pagado mayor al monto', local: p.unidadId, folio: p.folio || '(sin folio)',
+            concepto: p.concepto,
+            detalle: 'Monto ' + fmt(monto) + ' pero montoPagado es ' + fmt(pagado) + ' - imposible, revisar'
+          });
+        } else if (pendiente > monto + 0.5) {
+          problemas.push({
+            tipo: 'Pendiente mayor al monto', local: p.unidadId, folio: p.folio || '(sin folio)',
+            concepto: p.concepto,
+            detalle: 'Monto ' + fmt(monto) + ' pero saldoPendiente es ' + fmt(pendiente) + ' - imposible, revisar'
+          });
+        } else if (p.estatus === 'pagado' && pendiente > 0.5) {
+          problemas.push({
+            tipo: 'Pagado con saldo pendiente', local: p.unidadId, folio: p.folio || '(sin folio)',
+            concepto: p.concepto,
+            detalle: 'Esta marcado PAGADO pero saldoPendiente es ' + fmt(pendiente) + ' - revisar'
+          });
         }
+        // Duplicado real = mismo local + mismo folio + mismo concepto + mismo mes. Un folio
+        // generico repetido (ATRASO, F-10, etc.) en otro mes o concepto no es una doble
+        // captura, es solo texto reusado - antes se comparaba nada mas local+folio.
         if (p.folio) {
-          const key = p.unidadId + '|' + p.folio;
+          const key = p.unidadId + '|' + p.folio + '|' + p.concepto + '|' + String(p.fecha || '').slice(0, 7);
           foliosVistos[key] = (foliosVistos[key] || 0) + 1;
         }
       });
       Object.keys(foliosVistos).forEach(key => {
         if (foliosVistos[key] > 1) {
-          const [uid, folio] = key.split('|');
+          const [uid, folio, conc] = key.split('|');
           problemas.push({
-            tipo: 'Folio duplicado', local: uid, folio, concepto: '',
-            detalle: foliosVistos[key] + ' cargos activos con el mismo folio - revisa si es doble captura'
+            tipo: 'Folio duplicado', local: uid, folio, concepto: conc,
+            detalle: foliosVistos[key] + ' cargos activos con mismo folio+concepto+mes - revisa si es doble captura'
           });
         }
       });
